@@ -1,0 +1,3 @@
+[submodule "Bili23-Downloader"]
+	path = Bili23-Downloader
+	url = https://github.com/ScottSloan/Bili23-Downloader.git
