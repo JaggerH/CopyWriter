@@ -6,3 +6,4 @@
 *.pyc
 
 output/
+.config/download/*.json

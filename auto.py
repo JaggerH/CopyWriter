@@ -100,6 +100,44 @@ def start_watcher(folder, ignore_patterns=None, only_patterns=None):
 
 
 if __name__ == "__main__":
+    import subprocess
+    import sys
+    import os
+
+    def is_gui_running():
+        """
+        检查是否有 Bili23-Downloader/src/GUI.py 进程在运行
+        """
+        import psutil
+        gui_path = os.path.abspath("Bili23-Downloader/src/GUI.py")
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmdline = proc.info['cmdline']
+                if not cmdline:
+                    continue
+                # 兼容不同的python启动方式
+                for arg in cmdline:
+                    if os.path.abspath(arg) == gui_path:
+                        return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return False
+
+    try:
+        import psutil
+    except ImportError:
+        print("未检测到 psutil，正在尝试安装...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "psutil"])
+        import psutil
+
+    if not is_gui_running():
+        print("未检测到 GUI.py 进程，正在启动...")
+        gui_script = os.path.abspath("Bili23-Downloader/src/GUI.py")
+        # 在新进程中启动 GUI.py
+        subprocess.Popen([sys.executable, gui_script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        print("GUI.py 已在运行，跳过启动。")
+    
     watch_folder = "./download"
 
     # 配置忽略规则 (正则表达式列表)
