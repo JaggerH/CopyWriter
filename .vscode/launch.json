@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "C:\\Users\\Jagger\\anaconda3\\envs\\copywriter\\python.exe"
+        },
+        {
+            "name": "Python: Watchdog",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/watchdog.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "C:\\Users\\Jagger\\anaconda3\\envs\\copywriter\\python.exe"
+        }
+    ]
+}

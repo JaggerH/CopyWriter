@@ -78,10 +78,10 @@ def process_media_to_text(input_file):
         
         # 处理音频文件
         elif extension_lower in AUDIO_FORMATS:
-            if extension_lower == '.mp3':
+            if extension_lower in ['.mp3', ".m4a"]:
                 # MP3文件直接使用
                 mp3_path = input_file
-                print("使用MP3文件，无需转换")
+                print(f"{extension_lower[1:]}无需转换")
             else:
                 # 其他音频格式转换为MP3
                 temp_mp3_name = os.path.basename(base_name) + '.mp3'
