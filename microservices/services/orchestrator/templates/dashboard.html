@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CopyWriter 任务管理</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <div class="header">
+        <h1>🎬 CopyWriter 任务管理</h1>
+        <div class="header-actions">
+            <div class="connection-status" id="connectionStatus">
+                <span class="status-indicator offline" id="statusIndicator"></span>
+                <span id="statusText">连接中...</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- 新任务创建区域 -->
+        <div class="create-task-section">
+            <form id="createTaskForm" class="create-task-form">
+                <div class="form-group">
+                    <input type="text" 
+                           id="urlInput" 
+                           placeholder="粘贴包含视频链接的文本（支持抖音、TikTok、B站等）" 
+                           required>
+                    <button type="submit" id="createTaskBtn">
+                        <span id="createBtnText">创建任务</span>
+                        <span id="createBtnSpinner" class="spinner" style="display: none;"></span>
+                    </button>
+                </div>
+                <div class="form-options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="withWatermark">
+                        <span class="checkmark"></span>
+                        保留水印
+                    </label>
+                    <select id="qualitySelect">
+                        <option value="2">高质量</option>
+                        <option value="4" selected>标准质量</option>
+                        <option value="6">快速模式</option>
+                    </select>
+                </div>
+            </form>
+        </div>
+
+        <div class="main-content">
+            <!-- 任务列表 -->
+            <div class="task-list-panel">
+                <div class="panel-header">
+                    <h2>任务列表</h2>
+                    <div class="list-controls">
+                        <button id="refreshBtn" class="icon-btn" title="刷新">🔄</button>
+                        <button id="clearCompletedBtn" class="icon-btn" title="清除已完成">🗑️</button>
+                    </div>
+                </div>
+                <div class="task-list" id="taskList">
+                    <div class="loading-placeholder">
+                        <div class="spinner"></div>
+                        <p>加载任务列表中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 任务详情 -->
+            <div class="task-detail-panel">
+                <div class="panel-header">
+                    <h2>任务详情</h2>
+                </div>
+                <div class="task-detail" id="taskDetail">
+                    <div class="empty-state">
+                        <div class="empty-icon">📋</div>
+                        <p>选择一个任务查看详情</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 通知 -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- 确认对话框 -->
+    <div class="modal-overlay" id="modalOverlay" style="display: none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="modalTitle">确认操作</h3>
+                <button class="modal-close" id="modalClose">×</button>
+            </div>
+            <div class="modal-body">
+                <p id="modalMessage">确定要执行此操作吗？</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="modalCancel">取消</button>
+                <button class="btn-primary" id="modalConfirm">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import httpx
 import uuid
@@ -6,8 +9,17 @@ import os
 import logging
 import asyncio
 import subprocess
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import redis.asyncio as redis
+import json
+from datetime import datetime
+from urllib.parse import urlparse
+import re
+from models import (
+    TaskInfo, TaskListItem, TaskDetailResponse, CreateTaskRequest, 
+    CreateTaskResponse, TaskListResponse, WebSocketMessage, TaskStatus as TaskStatusEnum
+)
+from url_parser import VideoURLParser
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +31,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# 静态文件和模板配置
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
 # 环境变量配置
 VIDEO_SERVICE_URL = os.getenv("VIDEO_SERVICE_URL", "http://video-service:80")
 ASR_SERVICE_URL = os.getenv("ASR_SERVICE_URL", "http://asr-service:8000")
@@ -28,11 +44,43 @@ MEDIA_PATH = os.getenv("MEDIA_PATH", "/app/media")
 # Redis连接
 redis_client = None
 
+# WebSocket连接管理
+active_connections: List[WebSocket] = []
+
 async def get_redis():
     global redis_client
     if redis_client is None:
         redis_client = redis.from_url(REDIS_URL)
     return redis_client
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+    
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+    
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+    
+    async def broadcast(self, message: dict):
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(json.dumps(message))
+            except:
+                disconnected.append(connection)
+        
+        # Remove disconnected connections
+        for conn in disconnected:
+            self.disconnect(conn)
+
+manager = ConnectionManager()
+
+# 初始化URL解析器
+url_parser = VideoURLParser()
 
 class ProcessVideoRequest(BaseModel):
     url: str
@@ -46,13 +94,62 @@ class ProcessVideoResponse(BaseModel):
     message: str
     result: Optional[Dict] = None
 
-class TaskStatus(BaseModel):
+# Legacy TaskStatus model for backward compatibility
+class TaskStatusResponse(BaseModel):
     task_id: str
     status: str
     current_step: str
     progress: int
     result: Optional[Dict] = None
     error: Optional[str] = None
+
+# Utility functions
+def extract_title_from_url_or_text(input_text: str) -> str:
+    """从URL或文本中提取有意义的标题"""
+    try:
+        # 首先尝试用URL解析器生成标题
+        title = url_parser.generate_task_title(input_text)
+        if title and title != "视频任务":
+            return title
+        
+        # 回退到原有逻辑
+        parsed = urlparse(input_text)
+        domain = parsed.netloc.lower()
+        
+        if 'bilibili.com' in domain or 'b23.tv' in domain:
+            return f"Bilibili视频 - {input_text[-12:]}"
+        elif 'douyin.com' in domain or 'iesdouyin.com' in domain:
+            return f"抖音视频 - {input_text[-12:]}"
+        elif 'tiktok.com' in domain:
+            return f"TikTok视频 - {input_text[-12:]}"
+        elif 'youtube.com' in domain or 'youtu.be' in domain:
+            return f"YouTube视频 - {input_text[-12:]}"
+        else:
+            return f"视频任务 - {input_text[-12:]}"
+    except:
+        return f"视频任务 - {str(uuid.uuid4())[:8]}"
+
+def get_clean_video_url(input_text: str) -> str:
+    """从输入文本中获取清洁的视频URL"""
+    try:
+        # 尝试用URL解析器获取清洁URL
+        clean_url = url_parser.get_clean_url(input_text)
+        if clean_url:
+            return clean_url
+        
+        # 如果没有找到支持的平台URL，返回原始输入（假设它就是URL）
+        return input_text.strip()
+    except:
+        return input_text.strip()
+
+async def notify_websocket_clients(message_type: str, task_id: str, data: dict):
+    """Notify all WebSocket clients about task updates"""
+    message = {
+        "type": message_type,
+        "task_id": task_id,
+        "data": data
+    }
+    await manager.broadcast(message)
 
 @app.get("/health")
 async def health_check():
@@ -108,6 +205,80 @@ async def health_check():
     except Exception as e:
         return {"status": "unhealthy", "error": str(e)}
 
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    """Main dashboard page"""
+    return templates.TemplateResponse("dashboard.html", {"request": request})
+
+@app.websocket("/ws/tasks")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time task updates"""
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+@app.post("/api/tasks", response_model=CreateTaskResponse)
+async def create_task(request: CreateTaskRequest, background_tasks: BackgroundTasks):
+    """Create a new video processing task"""
+    task_id = str(uuid.uuid4())
+    created_time = datetime.now().isoformat()
+    
+    # 处理输入URL，支持从复杂文本中提取URL和标题
+    clean_url = get_clean_video_url(request.url)
+    title = request.title or extract_title_from_url_or_text(clean_url)
+    # 记录URL解析信息
+    video_links = url_parser.parse_video_links(clean_url)
+    if video_links:
+        logger.info(f"识别到{video_links[0].platform_name}链接: {clean_url}, 视频ID: {video_links[0].video_id}")
+    
+    # Save task to Redis with enhanced data
+    r = await get_redis()
+    task_data = {
+        "task_id": task_id,
+        "status": "queued",
+        "current_step": "initialized",
+        "progress": "0",
+        "url": clean_url,  # 使用清洁后的URL
+        "title": title,
+        "created_time": created_time,
+        "updated_time": created_time,
+        "quality": request.quality,
+        "with_watermark": str(request.with_watermark)
+    }
+    
+    await r.hset(f"task:{task_id}", mapping=task_data)
+    await r.zadd("tasks:created", {task_id: datetime.now().timestamp()})
+    
+    # 创建一个使用清洁URL的ProcessVideoRequest对象传递给pipeline
+    clean_request = ProcessVideoRequest(
+        url=clean_url,
+        quality=request.quality,
+        with_watermark=request.with_watermark,
+        chat_id=None  # 新任务API不使用chat_id
+    )
+    # Start processing
+    background_tasks.add_task(process_video_pipeline, task_id, clean_request)
+    
+    # Notify WebSocket clients
+    await notify_websocket_clients("task_created", task_id, {
+        "task_id": task_id,
+        "title": title,
+        "status": "queued",
+        "created_time": created_time,
+        "progress": 0
+    })
+    
+    return CreateTaskResponse(
+        task_id=task_id,
+        status="queued",
+        message="任务已创建，开始处理",
+        title=title
+    )
+
 @app.post("/api/process-video", response_model=ProcessVideoResponse)
 async def process_video(request: ProcessVideoRequest, background_tasks: BackgroundTasks):
     """
@@ -121,16 +292,33 @@ async def process_video(request: ProcessVideoRequest, background_tasks: Backgrou
     
     # 保存任务状态到Redis
     r = await get_redis()
+    created_time = datetime.now().isoformat()
+    
+    # 使用新的URL解析逻辑
+    clean_url = get_clean_video_url(request.url)
+    title = extract_title_from_url_or_text(request.url)
+    
     await r.hset(f"task:{task_id}", mapping={
         "status": "queued",
         "current_step": "initialized",
         "progress": "0",
-        "url": request.url,
-        "chat_id": request.chat_id or ""
+        "url": clean_url,
+        "chat_id": request.chat_id or "",
+        "title": title,
+        "created_time": created_time,
+        "updated_time": created_time
     })
     
+    # 创建一个使用清洁URL的ProcessVideoRequest对象传递给pipeline
+    clean_request = ProcessVideoRequest(
+        url=clean_url,
+        quality=request.quality,
+        with_watermark=request.with_watermark,
+        chat_id=None  # 新任务API不使用chat_id
+    )
+    
     # 后台执行任务
-    background_tasks.add_task(process_video_pipeline, task_id, request)
+    background_tasks.add_task(process_video_pipeline, task_id, clean_request)
     
     return ProcessVideoResponse(
         task_id=task_id,
@@ -154,7 +342,8 @@ async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
         
         # 步骤2: 转换音频 (本地FFmpeg)
         await update_task_status(r, task_id, "converting", "转换音频格式", 50)
-        audio_result = await convert_to_audio_local(video_path, task_id, request.quality)
+        quality = getattr(request, 'quality', '4')
+        audio_result = await convert_to_audio_local(video_path, task_id, quality)
         
         if not audio_result["success"]:
             raise Exception(f"音频转换失败: {audio_result.get('message')}")
@@ -176,30 +365,77 @@ async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
             "text": asr_result["text"]
         }
         
+        updated_time = datetime.now().isoformat()
         await r.hset(f"task:{task_id}", mapping={
             "status": "completed",
             "current_step": "finished",
             "progress": "100",
-            "result": str(result)
+            "result": str(result),
+            "updated_time": updated_time
         })
+        
+        # Get task data for WebSocket notification
+        task_data = await r.hgetall(f"task:{task_id}")
+        if task_data:
+            await notify_websocket_clients("task_update", task_id, {
+                "task_id": task_id,
+                "status": "completed",
+                "current_step": "finished",
+                "progress": 100,
+                "updated_time": updated_time,
+                "title": task_data.get(b"title", b"").decode(),
+                "result": result
+            })
         
         logger.info(f"任务 {task_id} 处理完成")
         
     except Exception as e:
         logger.error(f"任务 {task_id} 处理失败: {str(e)}")
+        updated_time = datetime.now().isoformat()
         await r.hset(f"task:{task_id}", mapping={
             "status": "failed",
             "current_step": "error",
-            "error": str(e)
+            "error": str(e),
+            "updated_time": updated_time
         })
+        
+        # Get task data for WebSocket notification
+        task_data = await r.hgetall(f"task:{task_id}")
+        if task_data:
+            await notify_websocket_clients("task_update", task_id, {
+                "task_id": task_id,
+                "status": "failed",
+                "current_step": "error",
+                "progress": int(task_data.get(b"progress", b"0").decode()),
+                "updated_time": updated_time,
+                "title": task_data.get(b"title", b"").decode(),
+                "error": str(e)
+            })
 
 async def update_task_status(r, task_id: str, status: str, step: str, progress: int):
     """更新任务状态"""
-    await r.hset(f"task:{task_id}", mapping={
+    updated_time = datetime.now().isoformat()
+    task_update = {
         "status": status,
         "current_step": step,
-        "progress": str(progress)
-    })
+        "progress": str(progress),
+        "updated_time": updated_time
+    }
+    
+    await r.hset(f"task:{task_id}", mapping=task_update)
+    
+    # Get task data for WebSocket notification
+    task_data = await r.hgetall(f"task:{task_id}")
+    if task_data:
+        # Notify WebSocket clients
+        await notify_websocket_clients("task_update", task_id, {
+            "task_id": task_id,
+            "status": status,
+            "current_step": step,
+            "progress": progress,
+            "updated_time": updated_time,
+            "title": task_data.get(b"title", b"").decode()
+        })
 
 async def download_video(url: str, task_id: str, with_watermark: bool = False) -> Dict:
     """调用视频服务下载视频"""
@@ -323,7 +559,124 @@ async def transcribe_audio(audio_path: str, task_id: str) -> Dict:
                 "message": f"识别失败: {response.text}"
             }
 
-@app.get("/api/task/{task_id}", response_model=TaskStatus)
+@app.get("/api/tasks", response_model=TaskListResponse)
+async def get_tasks(page: int = 1, page_size: int = 50):
+    """Get paginated task list, sorted by creation time (newest first)"""
+    r = await get_redis()
+    
+    try:
+        # Get task IDs sorted by creation time (newest first)
+        task_ids = await r.zrevrange("tasks:created", 0, -1)
+        total = len(task_ids)
+        
+        # Apply pagination
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_ids = task_ids[start_idx:end_idx]
+        
+        tasks = []
+        for task_id in paginated_ids:
+            # Convert bytes to string if needed
+            task_id_str = task_id.decode() if isinstance(task_id, bytes) else task_id
+            task_data = await r.hgetall(f"task:{task_id_str}")
+            if task_data:
+                try:
+                    tasks.append(TaskListItem(
+                        task_id=task_id_str,
+                        title=task_data.get(b"title", b"Unknown Task").decode(),
+                        status=TaskStatusEnum(task_data.get(b"status", b"queued").decode()),
+                        created_time=datetime.fromisoformat(task_data.get(b"created_time", datetime.now().isoformat()).decode()),
+                        progress=int(task_data.get(b"progress", b"0").decode())
+                    ))
+                except Exception as e:
+                    logger.error(f"Error parsing task {task_id_str}: {e}")
+                    continue
+        
+        return TaskListResponse(
+            tasks=tasks,
+            total=total,
+            page=page,
+            page_size=page_size
+        )
+        
+    except Exception as e:
+        logger.error(f"Error getting tasks: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get tasks")
+
+@app.get("/api/tasks/{task_id}", response_model=TaskDetailResponse)
+async def get_task_detail(task_id: str):
+    """Get detailed task information"""
+    r = await get_redis()
+    task_data = await r.hgetall(f"task:{task_id}")
+    
+    if not task_data:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    try:
+        result = None
+        if task_data.get(b"result"):
+            try:
+                result_str = task_data.get(b"result").decode()
+                result = eval(result_str) if result_str != "None" else None
+            except:
+                result = task_data.get(b"result").decode()
+        
+        return TaskDetailResponse(
+            task_id=task_id,
+            title=task_data.get(b"title", b"Unknown Task").decode(),
+            status=TaskStatusEnum(task_data.get(b"status", b"queued").decode()),
+            current_step=task_data.get(b"current_step", b"initialized").decode(),
+            progress=int(task_data.get(b"progress", b"0").decode()),
+            created_time=datetime.fromisoformat(task_data.get(b"created_time", datetime.now().isoformat()).decode()),
+            updated_time=datetime.fromisoformat(task_data.get(b"updated_time", datetime.now().isoformat()).decode()),
+            url=task_data.get(b"url", b"").decode(),
+            result=result,
+            error=task_data.get(b"error", b"").decode() if task_data.get(b"error") else None
+        )
+        
+    except Exception as e:
+        logger.error(f"Error parsing task detail {task_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to parse task data")
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str):
+    """Delete a specific task"""
+    r = await get_redis()
+    
+    # Check if task exists
+    task_exists = await r.exists(f"task:{task_id}")
+    if not task_exists:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Delete task data
+    await r.delete(f"task:{task_id}")
+    await r.zrem("tasks:created", task_id)
+    
+    # Notify WebSocket clients
+    await notify_websocket_clients("task_deleted", task_id, {"task_id": task_id})
+    
+    return {"message": "Task deleted successfully"}
+
+@app.delete("/api/tasks/completed")
+async def clear_completed_tasks():
+    """Delete all completed tasks"""
+    r = await get_redis()
+    
+    # Get all task IDs
+    task_ids = await r.zrange("tasks:created", 0, -1)
+    deleted_count = 0
+    
+    for task_id in task_ids:
+        task_data = await r.hgetall(f"task:{task_id}")
+        if task_data and task_data.get(b"status", b"").decode() == "completed":
+            await r.delete(f"task:{task_id}")
+            await r.zrem("tasks:created", task_id)
+            await notify_websocket_clients("task_deleted", task_id, {"task_id": task_id})
+            deleted_count += 1
+    
+    return {"message": f"Deleted {deleted_count} completed tasks"}
+
+@app.get("/api/task/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str):
     """获取任务状态"""
     r = await get_redis()
@@ -332,12 +685,21 @@ async def get_task_status(task_id: str):
     if not task_data:
         raise HTTPException(status_code=404, detail="任务不存在")
     
-    return TaskStatus(
+    # Parse result safely
+    result = None
+    if task_data.get(b"result"):
+        try:
+            result_str = task_data.get(b"result").decode()
+            result = eval(result_str) if result_str != "None" else None
+        except:
+            result = task_data.get(b"result").decode()
+    
+    return TaskStatusResponse(
         task_id=task_id,
         status=task_data.get(b"status", b"").decode(),
         current_step=task_data.get(b"current_step", b"").decode(),
         progress=int(task_data.get(b"progress", b"0").decode()),
-        result=eval(task_data.get(b"result", b"None").decode()) if task_data.get(b"result") else None,
+        result=result,
         error=task_data.get(b"error", b"").decode() if task_data.get(b"error") else None
     )
 
