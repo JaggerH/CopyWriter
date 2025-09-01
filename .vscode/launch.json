@@ -11,12 +11,30 @@
             "python": "C:\\Users\\Jagger\\anaconda3\\envs\\copywriter\\python.exe"
         },
         {
-            "name": "Python: Watchdog",
+            "name": "Test: Worker Processing",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/watchdog.py",
+            "program": "${workspaceFolder}/telegram_bot/test_worker.py",
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}/telegram_bot",
+            "python": "C:\\Users\\Jagger\\anaconda3\\envs\\copywriter\\python.exe"
+        },
+        {
+            "name": "Test: Complete Download Flow",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/telegram_bot/test_download_flow.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/telegram_bot",
+            "python": "C:\\Users\\Jagger\\anaconda3\\envs\\copywriter\\python.exe"
+        },
+        {
+            "name": "Debug: Bilibili Error Analysis",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/telegram_bot/src/parsers/bilibili_adapter.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/telegram_bot",
             "python": "C:\\Users\\Jagger\\anaconda3\\envs\\copywriter\\python.exe"
         }
     ]

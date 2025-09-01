@@ -7,3 +7,6 @@
 
 output/
 .config/download/*.json
+
+logs/
+telegram_bot/config.json
