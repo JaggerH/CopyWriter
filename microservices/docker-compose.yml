@@ -1,0 +1,94 @@
+version: '3.8'
+
+volumes:
+  # 共享媒体文件存储
+  media-pipeline:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./shared/media
+
+  # Redis数据持久化
+  redis-data:
+    driver: local
+
+  # ASR模型缓存
+  asr-models:
+    driver: local
+
+services:
+  # 1. 视频解析下载服务 (基于Douyin_TikTok_Download_API)
+  video-service:
+    build: 
+      context: ./services/Douyin_TikTok_Download_API
+      dockerfile: Dockerfile
+    container_name: copywriter-video-service
+    ports:
+      - "8080:80"
+    volumes:
+      - media-pipeline:/app/downloads
+    environment:
+      TZ: Asia/Shanghai  # 设置时区为亚洲/上海
+      PUID: 1026  # 设置容器内部的用户 ID
+      PGID: 100  # 设置容器内部的用户组 ID
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # 2. ASR语音识别服务 (NVIDIA NGC - CUDA 12.8 最高性能)
+  asr-service:
+    build: ./services/asr-service
+    container_name: copywriter-asr-service
+    ports:
+      - "8082:8000"
+    volumes:
+      - media-pipeline:/app/media
+      - asr-models:/app/models
+    environment:
+      - MODEL_CACHE_DIR=/app/models
+      - PYTHONPATH=/app
+      - CUDA_VISIBLE_DEVICES=0  # 使用第一个GPU
+    networks:
+      - app-network
+    restart: unless-stopped
+    runtime: nvidia  # 启用NVIDIA GPU支持
+
+  # 3. 任务编排服务 (API Gateway + 集成FFmpeg)
+  orchestrator-service:
+    build: ./services/orchestrator
+    container_name: copywriter-orchestrator
+    ports:
+      - "8081:8000"
+    volumes:
+      - media-pipeline:/app/media
+    environment:
+      - VIDEO_SERVICE_URL=http://video-service:80
+      - ASR_SERVICE_URL=http://asr-service:8000
+      - REDIS_URL=redis://redis:6379/0
+      - MEDIA_PATH=/app/media
+    depends_on:
+      - redis
+      - video-service
+      - asr-service
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # Redis任务队列和缓存
+  redis:
+    image: redis:alpine
+    container_name: copywriter-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+networks:
+  app-network:
+    driver: bridge
+    name: copywriter-network

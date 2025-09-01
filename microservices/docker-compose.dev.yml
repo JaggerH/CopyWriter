@@ -1,0 +1,86 @@
+# 开发环境Docker Compose配置
+version: '3.8'
+
+volumes:
+  media-pipeline:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./shared/media
+  redis-data:
+    driver: local
+  asr-models:
+    driver: local
+
+services:
+  # Redis (开发环境先启动)
+  redis:
+    image: redis:alpine
+    container_name: copywriter-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
+    command: redis-server --appendonly yes
+  video-service:
+    build: 
+      context: ./services/Douyin_TikTok_Download_API
+      dockerfile: Dockerfile
+    container_name: copywriter-video-service
+    ports:
+      - "8080:80"
+    volumes:
+      - media-pipeline:/app/downloads
+    environment:
+      TZ: Asia/Shanghai  # 设置时区为亚洲/上海
+      PUID: 1026  # 设置容器内部的用户 ID
+      PGID: 100  # 设置容器内部的用户组 ID
+    networks:
+      - app-network
+    restart: unless-stopped
+  # ASR服务 (独立测试)  
+  asr-service:
+    build: ./services/asr-service
+    container_name: copywriter-asr-dev
+    ports:
+      - "8082:8000"
+    volumes:
+      - media-pipeline:/app/media
+      - asr-models:/app/models
+      - ./services/asr-service:/app  # 代码热重载
+    networks:
+      - app-network
+    environment:
+      - LOG_LEVEL=DEBUG
+      - MODEL_CACHE_DIR=/app/models
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # 任务编排服务 (开发模式)
+  orchestrator-service:
+    build: ./services/orchestrator
+    container_name: copywriter-orchestrator-dev
+    ports:
+      - "8081:8000"
+    volumes:
+      - media-pipeline:/app/media
+      - ./services/orchestrator:/app  # 代码热重载
+    environment:
+      - VIDEO_SERVICE_URL=http://host.docker.internal:8080  # 连接宿主机上的视频服务
+      - ASR_SERVICE_URL=http://asr-service:8000
+      - REDIS_URL=redis://redis:6379/0
+      - MEDIA_PATH=/app/media
+      - LOG_LEVEL=DEBUG
+    depends_on:
+      - redis
+      - asr-service
+    networks:
+      - app-network
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+networks:
+  app-network:
+    driver: bridge
+    name: copywriter-dev-network
