@@ -340,6 +340,22 @@ async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
         
         video_path = video_result["file_path"]
         
+        # 更新任务标题为实际视频标题
+        video_title = video_result.get("video_title", "")
+        if video_title:
+            updated_time = datetime.now().isoformat()
+            await r.hset(f"task:{task_id}", mapping={
+                "title": video_title,
+                "updated_time": updated_time
+            })
+            
+            # 通知WebSocket客户端标题已更新
+            await notify_websocket_clients("task_title_updated", task_id, {
+                "task_id": task_id,
+                "new_title": video_title,
+                "updated_time": updated_time
+            })
+        
         # 步骤2: 转换音频 (本地FFmpeg)
         await update_task_status(r, task_id, "converting", "转换音频格式", 50)
         quality = getattr(request, 'quality', '4')
@@ -481,7 +497,9 @@ async def download_video(url: str, task_id: str, with_watermark: bool = False) -
                         "platform": result.get("platform"),
                         "video_id": result.get("video_id"),
                         "cached": result.get("cached", False),
-                        "message": result.get("message", "下载成功")
+                        "message": result.get("message", "下载成功"),
+                        "video_title": result.get("video_title", ""),  # 新增视频标题
+                        "video_info": result.get("video_info", {})  # 新增视频详细信息
                     }
                 else:
                     return {
