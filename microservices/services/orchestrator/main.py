@@ -17,8 +17,10 @@ from urllib.parse import urlparse
 import re
 from models import (
     TaskInfo, TaskListItem, TaskDetailResponse, CreateTaskRequest, 
-    CreateTaskResponse, TaskListResponse, WebSocketMessage, TaskStatus as TaskStatusEnum
+    CreateTaskResponse, TaskListResponse, WebSocketMessage, TaskStatus as TaskStatusEnum,
+    NotificationConfig, CallbackType
 )
+from notification_manager import UnifiedNotificationManager
 from url_parser import VideoURLParser
 
 # 配置日志
@@ -78,6 +80,16 @@ class ConnectionManager:
             self.disconnect(conn)
 
 manager = ConnectionManager()
+
+# 延迟初始化通知管理器
+notification_manager = None
+
+def get_notification_manager():
+    """获取通知管理器实例（延迟初始化）"""
+    global notification_manager
+    if notification_manager is None:
+        notification_manager = UnifiedNotificationManager(connection_manager=manager)
+    return notification_manager
 
 # 初始化URL解析器
 url_parser = VideoURLParser()
@@ -142,14 +154,11 @@ def get_clean_video_url(input_text: str) -> str:
     except:
         return input_text.strip()
 
+# 保持向后兼容性的包装函数
 async def notify_websocket_clients(message_type: str, task_id: str, data: dict):
-    """Notify all WebSocket clients about task updates"""
-    message = {
-        "type": message_type,
-        "task_id": task_id,
-        "data": data
-    }
-    await manager.broadcast(message)
+    """Notify all WebSocket clients about task updates (Legacy function)"""
+    manager = get_notification_manager()
+    await manager.send_notification(message_type, task_id, data, None)
 
 @app.get("/health")
 async def health_check():
@@ -250,6 +259,10 @@ async def create_task(request: CreateTaskRequest, background_tasks: BackgroundTa
         "with_watermark": str(request.with_watermark)
     }
     
+    # 保存通知配置到 Redis
+    if request.notification:
+        task_data["notification_config"] = request.notification.json()
+    
     await r.hset(f"task:{task_id}", mapping=task_data)
     await r.zadd("tasks:created", {task_id: datetime.now().timestamp()})
     
@@ -263,14 +276,17 @@ async def create_task(request: CreateTaskRequest, background_tasks: BackgroundTa
     # Start processing
     background_tasks.add_task(process_video_pipeline, task_id, clean_request)
     
-    # Notify WebSocket clients
-    await notify_websocket_clients("task_created", task_id, {
+    # 发送创建通知
+    notification_data = {
         "task_id": task_id,
         "title": title,
         "status": "queued",
         "created_time": created_time,
-        "progress": 0
-    })
+        "progress": 0,
+        "url": clean_url
+    }
+    manager = get_notification_manager()
+    await manager.notify_task_created(task_id, notification_data, request.notification)
     
     return CreateTaskResponse(
         task_id=task_id,
@@ -349,12 +365,24 @@ async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
                 "updated_time": updated_time
             })
             
-            # 通知WebSocket客户端标题已更新
-            await notify_websocket_clients("task_title_updated", task_id, {
+            # 获取通知配置
+            task_data_full = await r.hgetall(f"task:{task_id}")
+            notification_config = None
+            if task_data_full.get(b"notification_config"):
+                try:
+                    import json
+                    notification_dict = json.loads(task_data_full[b"notification_config"].decode())
+                    notification_config = NotificationConfig(**notification_dict)
+                except Exception as e:
+                    logger.error(f"Failed to parse notification config: {e}")
+            
+            # 通知标题已更新
+            manager = get_notification_manager()
+            await manager.send_notification("task_title_updated", task_id, {
                 "task_id": task_id,
                 "new_title": video_title,
                 "updated_time": updated_time
-            })
+            }, notification_config)
         
         # 步骤2: 转换音频 (本地FFmpeg)
         await update_task_status(r, task_id, "converting", "转换音频格式", 50)
@@ -390,18 +418,30 @@ async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
             "updated_time": updated_time
         })
         
-        # Get task data for WebSocket notification
-        task_data = await r.hgetall(f"task:{task_id}")
-        if task_data:
-            await notify_websocket_clients("task_update", task_id, {
+        # 获取任务数据和通知配置
+        task_data_full = await r.hgetall(f"task:{task_id}")
+        notification_config = None
+        if task_data_full and task_data_full.get(b"notification_config"):
+            try:
+                import json
+                notification_dict = json.loads(task_data_full[b"notification_config"].decode())
+                notification_config = NotificationConfig(**notification_dict)
+            except Exception as e:
+                logger.error(f"Failed to parse notification config: {e}")
+        
+        if task_data_full:
+            completion_data = {
                 "task_id": task_id,
                 "status": "completed",
                 "current_step": "finished",
                 "progress": 100,
                 "updated_time": updated_time,
-                "title": task_data.get(b"title", b"").decode(),
-                "result": result
-            })
+                "title": task_data_full.get(b"title", b"").decode(),
+                "result": result,
+                "url": task_data_full.get(b"url", b"").decode()
+            }
+            manager = get_notification_manager()
+            await manager.notify_task_completed(task_id, completion_data, notification_config)
         
         logger.info(f"任务 {task_id} 处理完成")
         
@@ -415,18 +455,30 @@ async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
             "updated_time": updated_time
         })
         
-        # Get task data for WebSocket notification
-        task_data = await r.hgetall(f"task:{task_id}")
-        if task_data:
-            await notify_websocket_clients("task_update", task_id, {
+        # 获取任务数据和通知配置
+        task_data_full = await r.hgetall(f"task:{task_id}")
+        notification_config = None
+        if task_data_full and task_data_full.get(b"notification_config"):
+            try:
+                import json
+                notification_dict = json.loads(task_data_full[b"notification_config"].decode())
+                notification_config = NotificationConfig(**notification_dict)
+            except Exception as e:
+                logger.error(f"Failed to parse notification config: {e}")
+        
+        if task_data_full:
+            failure_data = {
                 "task_id": task_id,
                 "status": "failed",
                 "current_step": "error",
-                "progress": int(task_data.get(b"progress", b"0").decode()),
+                "progress": int(task_data_full.get(b"progress", b"0").decode()),
                 "updated_time": updated_time,
-                "title": task_data.get(b"title", b"").decode(),
-                "error": str(e)
-            })
+                "title": task_data_full.get(b"title", b"").decode(),
+                "error": str(e),
+                "url": task_data_full.get(b"url", b"").decode()
+            }
+            manager = get_notification_manager()
+            await manager.notify_task_failed(task_id, failure_data, notification_config)
 
 async def update_task_status(r, task_id: str, status: str, step: str, progress: int):
     """更新任务状态"""
@@ -440,18 +492,29 @@ async def update_task_status(r, task_id: str, status: str, step: str, progress: 
     
     await r.hset(f"task:{task_id}", mapping=task_update)
     
-    # Get task data for WebSocket notification
-    task_data = await r.hgetall(f"task:{task_id}")
-    if task_data:
-        # Notify WebSocket clients
-        await notify_websocket_clients("task_update", task_id, {
+    # 获取任务数据和通知配置
+    task_data_full = await r.hgetall(f"task:{task_id}")
+    notification_config = None
+    if task_data_full and task_data_full.get(b"notification_config"):
+        try:
+            import json
+            notification_dict = json.loads(task_data_full[b"notification_config"].decode())
+            notification_config = NotificationConfig(**notification_dict)
+        except Exception as e:
+            logger.error(f"Failed to parse notification config: {e}")
+    
+    if task_data_full:
+        update_data = {
             "task_id": task_id,
             "status": status,
             "current_step": step,
             "progress": progress,
             "updated_time": updated_time,
-            "title": task_data.get(b"title", b"").decode()
-        })
+            "title": task_data_full.get(b"title", b"").decode(),
+            "url": task_data_full.get(b"url", b"").decode()
+        }
+        manager = get_notification_manager()
+        await manager.notify_task_update(task_id, update_data, notification_config)
 
 async def download_video(url: str, task_id: str, with_watermark: bool = False) -> Dict:
     """调用视频服务下载视频（使用共享存储，避免文件重复传输）"""
@@ -700,8 +763,9 @@ async def delete_task(task_id: str):
     await r.delete(f"task:{task_id}")
     await r.zrem("tasks:created", task_id)
     
-    # Notify WebSocket clients
-    await notify_websocket_clients("task_deleted", task_id, {"task_id": task_id})
+    # 通知任务删除
+    manager = get_notification_manager()
+    await manager.notify_task_deleted(task_id, {"task_id": task_id})
     
     return {"message": "Task deleted successfully"}
 
@@ -719,7 +783,8 @@ async def clear_completed_tasks():
         if task_data and task_data.get(b"status", b"").decode() == "completed":
             await r.delete(f"task:{task_id}")
             await r.zrem("tasks:created", task_id)
-            await notify_websocket_clients("task_deleted", task_id, {"task_id": task_id})
+            manager = get_notification_manager()
+            await manager.notify_task_deleted(task_id, {"task_id": task_id})
             deleted_count += 1
     
     return {"message": f"Deleted {deleted_count} completed tasks"}

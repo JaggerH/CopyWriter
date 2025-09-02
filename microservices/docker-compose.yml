@@ -1,5 +1,3 @@
-version: '3.8'
-
 volumes:
   # 共享媒体文件存储
   media-pipeline:
@@ -68,6 +66,7 @@ services:
       - ASR_SERVICE_URL=http://asr-service:8000
       - REDIS_URL=redis://redis:6379/0
       - MEDIA_PATH=/app/media
+      - TELEGRAM_BOT_SERVICE_URL=http://telegram-bot:8000  # Telegram Bot 服务回调 URL
     depends_on:
       - redis
       - video-service
@@ -88,6 +87,23 @@ services:
       - app-network
     restart: unless-stopped
     command: redis-server --appendonly yes
+
+  # 4. Telegram Bot 服务 (混合: Bot + 回调 API)
+  telegram-bot:
+    build: ./services/telegram-bot
+    container_name: copywriter-telegram-bot
+    ports:
+      - "8083:8000"  # 暴露回调 API 端口
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - ORCHESTRATOR_URL=http://orchestrator-service:8000
+      - ORCHESTRATOR_TIMEOUT=30
+    depends_on:
+      - orchestrator-service
+      - redis
+    networks:
+      - app-network
+    restart: unless-stopped
 
 networks:
   app-network:

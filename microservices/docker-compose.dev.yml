@@ -1,6 +1,4 @@
 # 开发环境Docker Compose配置
-version: '3.8'
-
 volumes:
   media-pipeline:
     driver: local
@@ -85,7 +83,23 @@ services:
       - app-network
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     # command: tail -f /dev/null
-
+  # 4. Telegram Bot 服务
+  telegram-bot:
+    build: ./services/telegram-bot
+    container_name: copywriter-telegram-bot
+    ports:
+      - "8083:8000"  # 暴露回调 API 端口
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - ORCHESTRATOR_URL=http://orchestrator-service:8000
+      - ORCHESTRATOR_TIMEOUT=30
+    depends_on:
+      - orchestrator-service
+      - redis
+    networks:
+      - app-network
+    restart: unless-stopped
+    # No ports exposed - bot uses Telegram's servers
 networks:
   app-network:
     driver: bridge
