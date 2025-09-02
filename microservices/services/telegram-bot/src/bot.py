@@ -9,7 +9,6 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from loguru import logger
 
 from .config import Config
-from .url_parser import find_video_url, extract_urls, Platform
 from .orchestrator_client import OrchestratorClient
 
 
@@ -151,37 +150,17 @@ class MicroservicesTelegramBot:
         chat_id = str(update.effective_chat.id)
         message_id = str(update.message.message_id)
         
-        # 提取视频URL
-        url_result = find_video_url(message_text)
-        
-        if not url_result:
+        # 简单检查是否包含URL
+        if not ("http://" in message_text or "https://" in message_text):
             await update.message.reply_text(
-                "❌ 未找到支持的视频链接\n\n"
+                "❌ 请发送视频链接\n\n"
                 "支持的平台：\n"
                 "🔸 **Bilibili (哔哩哔哩)**\n"
-                "• https://www.bilibili.com/video/BVxxxxxxx\n"
-                "• https://b23.tv/xxxxxxx\n"
-                "• https://m.bilibili.com/video/BVxxxxxxx\n\n"
                 "🎵 **Douyin (抖音)**\n"
-                "• https://v.douyin.com/xxxxxxx\n"
-                "• https://www.douyin.com/video/xxxxxxx\n\n"
-                "🎬 **TikTok**\n"
-                "• https://www.tiktok.com/@user/video/xxxxxxx\n"
-                "• https://vm.tiktok.com/xxxxxxx\n\n"
-                "💡 请发送完整的视频链接"
+                "🎬 **TikTok**\n\n"
+                "💡 请发送完整的视频链接，系统会自动识别平台"
             )
             return
-        
-        url, platform = url_result
-        
-        # 检查多链接情况
-        all_urls = extract_urls(message_text)
-        if len(all_urls) > 1:
-            await update.message.reply_text(
-                f"📝 检测到 {len(all_urls)} 个链接，将处理第一个：\n"
-                f"🎯 平台: {platform.value.title()}\n"
-                f"🔗 链接: {url[:60]}{'...' if len(url) > 60 else ''}"
-            )
         
         # 检查orchestrator服务状态
         if not await self.orchestrator_client.health_check():
@@ -191,28 +170,21 @@ class MicroservicesTelegramBot:
             )
             return
         
-        # 创建任务
+        # 创建任务 - 让 orchestrator 处理URL验证和解析
         response = await self.orchestrator_client.create_task(
-            url=url,
+            url=message_text,  # 直接传递原始消息，让orchestrator处理
             chat_id=chat_id,
             user_id=user_id,
             message_id=message_id
         )
         
         if response:
-            platform_emoji = {
-                Platform.BILIBILI: "🔸",
-                Platform.DOUYIN: "🎵",
-                Platform.TIKTOK: "🎬"
-            }
-            
             success_message = f"""
 ✅ *任务创建成功！*
 
 🆔 *任务ID*: `{response.task_id}`
-{platform_emoji.get(platform, "🔗")} *平台*: {platform.value.title()}
 🎯 *标题*: {response.title}
-🔗 *链接*: {url[:50]}{'...' if len(url) > 50 else ''}
+🔗 *链接*: {message_text[:50]}{'...' if len(message_text) > 50 else ''}
 
 ⏳ *状态*: {response.status}
 🔔 *处理完成后将自动发送转录结果*
@@ -222,15 +194,15 @@ class MicroservicesTelegramBot:
             
             await update.message.reply_text(success_message, parse_mode='Markdown')
             
-            logger.info(f"Created task {response.task_id} for user {user_id}, platform: {platform.value}")
+            logger.info(f"Created task {response.task_id} for user {user_id}")
         else:
             await update.message.reply_text(
                 "❌ 创建转录任务失败\n\n"
                 "可能原因：\n"
-                "• 链接格式不正确\n"
+                "• 链接格式不正确或不支持该平台\n"
                 "• 服务暂时繁忙\n"
                 "• 网络连接问题\n\n"
-                "请稍后重试，或使用 /help 查看支持的链接格式"
+                "请检查链接格式并稍后重试"
             )
     
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
