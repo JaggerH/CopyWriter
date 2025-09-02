@@ -28,6 +28,7 @@ services:
       - "8080:80"
     volumes:
       - media-pipeline:/app/downloads
+      - ./config.yml:/app/config.yaml  # 自定义配置文件
     environment:
       TZ: Asia/Shanghai  # 设置时区为亚洲/上海
       PUID: 1026  # 设置容器内部的用户 ID

@@ -34,6 +34,8 @@ services:
       - "8080:80"
     volumes:
       - media-pipeline:/app/downloads
+      - ./services/Douyin_TikTok_Download_API:/app  # 代码热重载
+      - ./config.yml:/app/config.yaml  # 自定义配置文件
     environment:
       TZ: Asia/Shanghai  # 设置时区为亚洲/上海
       PUID: 1026  # 设置容器内部的用户 ID
@@ -51,11 +53,14 @@ services:
       - media-pipeline:/app/media
       - asr-models:/app/models
       - ./services/asr-service:/app  # 代码热重载
-    networks:
-      - app-network
     environment:
       - LOG_LEVEL=DEBUG
       - MODEL_CACHE_DIR=/app/models
+      - PYTHONPATH=/app
+      - CUDA_VISIBLE_DEVICES=0  # 使用第一个GPU
+    networks:
+      - app-network
+    runtime: nvidia  # 启用NVIDIA GPU支持
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   # 任务编排服务 (开发模式)
@@ -79,6 +84,7 @@ services:
     networks:
       - app-network
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    # command: tail -f /dev/null
 
 networks:
   app-network:

@@ -438,31 +438,61 @@ async def update_task_status(r, task_id: str, status: str, step: str, progress: 
         })
 
 async def download_video(url: str, task_id: str, with_watermark: bool = False) -> Dict:
-    """调用视频服务下载视频"""
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    """调用视频服务下载视频（使用共享存储，避免文件重复传输）"""
+    # 增加超时时间以支持大文件下载
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0)) as client:
         params = {
             "url": url,
             "prefix": True,
             "with_watermark": with_watermark
         }
         
-        response = await client.get(f"{VIDEO_SERVICE_URL}/api/download", params=params)
+        # 使用普通的GET请求，但增加超时时间
+        response = await client.get(f"{VIDEO_SERVICE_URL}/api/download_info", params=params)
         
         if response.status_code == 200:
-            # 保存下载的视频文件到共享存储
-            video_filename = f"{task_id}.mp4"
-            video_path = os.path.join(MEDIA_PATH, "raw", video_filename)
+            result = response.json()
             
-            os.makedirs(os.path.dirname(video_path), exist_ok=True)
-            
-            with open(video_path, "wb") as f:
-                f.write(response.content)
-            
-            return {
-                "success": True,
-                "file_path": video_path,
-                "message": "下载成功"
-            }
+            if result.get("success"):
+                # video-service 已经下载文件到共享存储
+                # 我们只需要将文件路径转换为 orchestrator 的路径空间
+                original_file_path = result.get("file_path")
+                file_name = result.get("file_name")
+                
+                # 将 video-service 的路径转换为 orchestrator 路径
+                # 因为两者都挂载了同一个 volume (media-pipeline)
+                # 处理相对路径和绝对路径两种情况
+                if original_file_path.startswith('./downloads'):
+                    # 相对路径：./downloads/... → /app/media/...
+                    shared_file_path = original_file_path.replace('./downloads', '/app/media')
+                elif original_file_path.startswith('/app/downloads'):
+                    # 绝对路径：/app/downloads/... → /app/media/...
+                    shared_file_path = original_file_path.replace('/app/downloads', '/app/media')
+                else:
+                    # 其他情况，尝试构造正确路径
+                    shared_file_path = f"/app/media/{original_file_path.lstrip('./')}"
+                
+                # 验证文件是否存在
+                if os.path.exists(shared_file_path):
+                    return {
+                        "success": True,
+                        "file_path": shared_file_path,
+                        "file_name": file_name,
+                        "platform": result.get("platform"),
+                        "video_id": result.get("video_id"),
+                        "cached": result.get("cached", False),
+                        "message": result.get("message", "下载成功")
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": f"文件不存在于共享存储: {shared_file_path}"
+                    }
+            else:
+                return {
+                    "success": False,
+                    "message": f"视频服务返回失败: {result}"
+                }
         else:
             return {
                 "success": False,

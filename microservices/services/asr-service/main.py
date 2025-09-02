@@ -100,9 +100,6 @@ async def transcribe_audio(request: TranscribeRequest):
     - language: 语言设置（暂时仅支持中文）
     """
     try:
-        print(111, os.listdir("/app/media/audio"))
-
-        
         # 验证输入文件
         if not os.path.exists(request.audio_path):
             raise HTTPException(
