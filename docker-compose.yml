@@ -33,7 +33,7 @@ services:
       PGID: 100  # 设置容器内部的用户组 ID
     networks:
       - app-network
-    restart: unless-stopped
+    restart: always
 
   # 2. ASR语音识别服务 (NVIDIA NGC - CUDA 12.8 最高性能)
   asr-service:
@@ -50,7 +50,7 @@ services:
       - CUDA_VISIBLE_DEVICES=0  # 使用第一个GPU
     networks:
       - app-network
-    restart: unless-stopped
+    restart: always
     runtime: nvidia  # 启用NVIDIA GPU支持
 
   # 3. 任务编排服务 (API Gateway + 集成FFmpeg)
@@ -73,7 +73,7 @@ services:
       - asr-service
     networks:
       - app-network
-    restart: unless-stopped
+    restart: always
 
   # Redis任务队列和缓存
   redis:
@@ -85,7 +85,7 @@ services:
       - redis-data:/data
     networks:
       - app-network
-    restart: unless-stopped
+    restart: always
     command: redis-server --appendonly yes
 
   # 4. Telegram Bot 服务 (混合: Bot + 回调 API)
@@ -103,7 +103,7 @@ services:
       - redis
     networks:
       - app-network
-    restart: unless-stopped
+    restart: always
 
 networks:
   app-network:

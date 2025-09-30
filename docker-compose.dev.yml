@@ -41,7 +41,7 @@ services:
     networks:
       - app-network
     restart: unless-stopped
-  # ASR服务 (独立测试)  
+  # ASR服务 (独立测试)
   asr-service:
     build: ./services/asr-service
     container_name: copywriter-asr-dev
@@ -56,6 +56,8 @@ services:
       - MODEL_CACHE_DIR=/app/models
       - PYTHONPATH=/app
       - CUDA_VISIBLE_DEVICES=0  # 使用第一个GPU
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
     networks:
       - app-network
     runtime: nvidia  # 启用NVIDIA GPU支持
@@ -76,6 +78,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - MEDIA_PATH=/app/media
       - LOG_LEVEL=DEBUG
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
     depends_on:
       - redis
       - asr-service
@@ -86,19 +90,23 @@ services:
   # 4. Telegram Bot 服务
   telegram-bot:
     build: ./services/telegram-bot
-    container_name: copywriter-telegram-bot
+    container_name: copywriter-telegram-bot-dev
     ports:
       - "8083:8000"  # 暴露回调 API 端口
+    volumes:
+      - ./services/telegram-bot:/app  # 代码热重载
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - ORCHESTRATOR_URL=http://orchestrator-service:8000
       - ORCHESTRATOR_TIMEOUT=30
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
     depends_on:
       - orchestrator-service
       - redis
     networks:
       - app-network
-    restart: unless-stopped
+    command: python -u main.py
     # No ports exposed - bot uses Telegram's servers
 networks:
   app-network:
