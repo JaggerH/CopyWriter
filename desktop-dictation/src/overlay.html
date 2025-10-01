@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Recording</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 200px;
+      height: 100px;
+      background: transparent;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+      -webkit-app-region: no-drag;
+    }
+
+    .recording-container {
+      width: 120px;
+      height: 40px;
+      background: transparent;
+      border: 2px solid rgba(255, 59, 48, 0.8);
+      border-radius: 40px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow: 0 4px 4px rgba(196, 188, 188, 0.5);
+      backdrop-filter: blur(3px);
+      transition: all 0.3s ease;
+    }
+
+    .recording-container.active {
+      border-color: rgba(255, 59, 48, 1);
+      box-shadow: 0 0 5px rgba(255, 59, 48, 0.6), 0 4px 5px rgba(0, 0, 0, 0.5);
+    }
+
+    .audio-visualizer {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      height: 10px;
+    }
+
+    .bar {
+      width: 4px;
+      background: linear-gradient(180deg, #ff3b30 0%, #ff6b5f 100%);
+      border-radius: 2px;
+      transition: height 0.1s ease;
+    }
+
+    /* Idle state: gentle wave animation */
+    .recording-container:not(.active) .bar {
+      animation: idle-wave 2s ease-in-out infinite;
+      height: 10px;
+    }
+
+    .recording-container:not(.active) .bar:nth-child(1) { animation-delay: 0s; }
+    .recording-container:not(.active) .bar:nth-child(2) { animation-delay: 0.1s; }
+    .recording-container:not(.active) .bar:nth-child(3) { animation-delay: 0.2s; }
+    .recording-container:not(.active) .bar:nth-child(4) { animation-delay: 0.3s; }
+    .recording-container:not(.active) .bar:nth-child(5) { animation-delay: 0.4s; }
+    .recording-container:not(.active) .bar:nth-child(6) { animation-delay: 0.3s; }
+    .recording-container:not(.active) .bar:nth-child(7) { animation-delay: 0.2s; }
+    .recording-container:not(.active) .bar:nth-child(8) { animation-delay: 0.1s; }
+    .recording-container:not(.active) .bar:nth-child(9) { animation-delay: 0s; }
+
+    /* Active state: pulsing animation */
+    .recording-container.active .bar {
+      animation: pulse-wave 0.6s ease-in-out infinite;
+    }
+
+    .recording-container.active .bar:nth-child(1) { animation-delay: 0s; height: 8px; }
+    .recording-container.active .bar:nth-child(2) { animation-delay: 0.05s; height: 12px; }
+    .recording-container.active .bar:nth-child(3) { animation-delay: 0.1s; height: 16px; }
+    .recording-container.active .bar:nth-child(4) { animation-delay: 0.15s; height: 18px; }
+    .recording-container.active .bar:nth-child(5) { animation-delay: 0.2s; height: 15px; }
+    .recording-container.active .bar:nth-child(6) { animation-delay: 0.15s; height: 18px; }
+    .recording-container.active .bar:nth-child(7) { animation-delay: 0.1s; height: 16px; }
+    .recording-container.active .bar:nth-child(8) { animation-delay: 0.05s; height: 12px; }
+    .recording-container.active .bar:nth-child(9) { animation-delay: 0s; height: 8px; }
+
+    @keyframes idle-wave {
+      0%, 100% {
+        height: 10px;
+        opacity: 0.6;
+      }
+      50% {
+        height: 20px;
+        opacity: 0.9;
+      }
+    }
+
+    @keyframes pulse-wave {
+      0%, 100% {
+        transform: scaleY(0.8);
+        opacity: 0.8;
+      }
+      50% {
+        transform: scaleY(1.2);
+        opacity: 1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="recording-container" id="container">
+    <div class="audio-visualizer">
+      <div class="bar"></div>
+      <div class="bar"></div>
+      <div class="bar"></div>
+      <div class="bar"></div>
+      <div class="bar"></div>
+      <div class="bar"></div>
+      <div class="bar"></div>
+      <div class="bar"></div>
+      <div class="bar"></div>
+    </div>
+  </div>
+
+  <script>
+    // Listen for audio level updates from main process
+    window.addEventListener('DOMContentLoaded', () => {
+      const container = document.getElementById('container');
+
+      // Simulate active state on window show
+      // In real implementation, main.js should send IPC messages about audio levels
+      setTimeout(() => {
+        container.classList.add('active');
+      }, 100);
+
+      // You can add IPC listener here to toggle active class based on actual audio input
+      // Example:
+      // const { ipcRenderer } = require('electron');
+      // ipcRenderer.on('audio-level', (event, level) => {
+      //   if (level > 0.1) {
+      //     container.classList.add('active');
+      //   } else {
+      //     container.classList.remove('active');
+      //   }
+      // });
+    });
+  </script>
+</body>
+</html>

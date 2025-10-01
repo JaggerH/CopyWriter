@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Audio Recorder</title>
+</head>
+<body>
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let audioStream = null;
+
+    // Initialize audio recording
+    async function initRecorder() {
+      try {
+        // Request microphone access
+        audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true
+          }
+        });
+
+        console.log('Microphone access granted');
+      } catch (error) {
+        console.error('Error accessing microphone:', error.name, error.message);
+
+        // Try again with simpler audio constraints
+        try {
+          audioStream = await navigator.mediaDevices.getUserMedia({
+            audio: true
+          });
+          console.log('Microphone access granted (simple mode)');
+        } catch (error2) {
+          console.error('Still cannot access microphone:', error2.name, error2.message);
+        }
+      }
+    }
+
+    // Start recording
+    ipcRenderer.on('start-recording', async () => {
+      if (!audioStream) {
+        await initRecorder();
+      }
+
+      if (!audioStream) {
+        console.error('Cannot start recording - no audio stream');
+        return;
+      }
+
+      audioChunks = [];
+
+      // Create MediaRecorder with WAV support
+      mediaRecorder = new MediaRecorder(audioStream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Combine chunks into a single blob
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+
+        // Convert blob to array buffer
+        const arrayBuffer = await audioBlob.arrayBuffer();
+
+        // Send to main process
+        ipcRenderer.send('audio-data', arrayBuffer);
+      };
+
+      mediaRecorder.start();
+      console.log('MediaRecorder started');
+    });
+
+    // Stop recording
+    ipcRenderer.on('stop-recording', () => {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+        console.log('MediaRecorder stopped');
+      }
+    });
+
+    // Initialize on load
+    initRecorder();
+  </script>
+</body>
+</html>

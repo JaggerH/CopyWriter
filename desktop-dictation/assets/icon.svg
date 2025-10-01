@@ -1,0 +1,20 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="128" cy="128" r="120" fill="#FF3B30"/>
+
+  <!-- Microphone body -->
+  <rect x="100" y="60" width="56" height="80" rx="28" fill="white"/>
+
+  <!-- Microphone stand -->
+  <path d="M 128 140 L 128 180" stroke="white" stroke-width="12" stroke-linecap="round"/>
+
+  <!-- Microphone base -->
+  <path d="M 100 180 L 156 180" stroke="white" stroke-width="12" stroke-linecap="round"/>
+
+  <!-- Microphone sound waves -->
+  <path d="M 70 90 Q 60 90 55 100" stroke="white" stroke-width="8" fill="none" stroke-linecap="round" opacity="0.7"/>
+  <path d="M 186 90 Q 196 90 201 100" stroke="white" stroke-width="8" fill="none" stroke-linecap="round" opacity="0.7"/>
+
+  <path d="M 50 110 Q 40 110 35 125" stroke="white" stroke-width="8" fill="none" stroke-linecap="round" opacity="0.5"/>
+  <path d="M 206 110 Q 216 110 221 125" stroke="white" stroke-width="8" fill="none" stroke-linecap="round" opacity="0.5"/>
+</svg>
