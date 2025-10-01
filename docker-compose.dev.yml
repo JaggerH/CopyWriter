@@ -51,6 +51,7 @@ services:
       - media-pipeline:/app/media
       - asr-models:/app/models
       - ./services/asr-service:/app  # 代码热重载
+      - ./services/asr-service/user_models:/app/user_models  # 热词和用户数据持久化
     environment:
       - LOG_LEVEL=DEBUG
       - MODEL_CACHE_DIR=/app/models

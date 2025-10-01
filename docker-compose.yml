@@ -44,6 +44,7 @@ services:
     volumes:
       - media-pipeline:/app/media
       - asr-models:/app/models
+      - ./services/asr-service/user_models:/app/user_models  # 热词和用户数据持久化
     environment:
       - MODEL_CACHE_DIR=/app/models
       - PYTHONPATH=/app
