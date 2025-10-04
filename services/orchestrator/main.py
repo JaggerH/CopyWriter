@@ -654,14 +654,14 @@ async def transcribe_audio(audio_path: str, task_id: str) -> Dict:
     async with httpx.AsyncClient(timeout=600.0) as client:
         text_filename = f"{task_id}.txt"
         text_path = os.path.join(MEDIA_PATH, "text", text_filename)
-        
+
         payload = {
             "audio_path": audio_path,
             "output_path": text_path
         }
-        
-        response = await client.post(f"{ASR_SERVICE_URL}/transcribe", json=payload)
-        
+
+        response = await client.post(f"{ASR_SERVICE_URL}/transcribe-path", json=payload)
+
         if response.status_code == 200:
             return response.json()
         else:
