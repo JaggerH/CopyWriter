@@ -179,22 +179,8 @@ class MicroservicesTelegramBot:
         )
         
         if response:
-            success_message = f"""
-✅ *任务创建成功！*
-
-🆔 *任务ID*: `{response.task_id}`
-🎯 *标题*: {response.title}
-🔗 *链接*: {message_text[:50]}{'...' if len(message_text) > 50 else ''}
-
-⏳ *状态*: {response.status}
-🔔 *处理完成后将自动发送转录结果*
-
-💡 您可以继续发送其他视频链接
-            """
-            
-            await update.message.reply_text(success_message, parse_mode='Markdown')
-            
-            logger.info(f"Created task {response.task_id} for user {user_id}")
+            # 不发送消息，让 callback API 处理所有状态更新
+            logger.info(f"Created task {response.task_id} for user {user_id}, waiting for callback updates")
         else:
             await update.message.reply_text(
                 "❌ 创建转录任务失败\n\n"

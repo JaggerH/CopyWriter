@@ -50,13 +50,12 @@ class TelegramMessageFormatter:
     
     @staticmethod
     def _format_task_update(task_id: str, data: Dict[str, Any]) -> str:
-        """格式化任务更新消息"""
+        """格式化任务更新消息（简洁版，用于实时更新）"""
         progress = data.get('progress', 0)
         current_step = data.get('current_step', 'processing')
         title = data.get('title', 'Unknown')
         status = data.get('status', 'queued')
-        updated_time = data.get('updated_time', 'N/A')
-        
+
         status_emoji = {
             'queued': '📋',
             'downloading': '⬇️',
@@ -65,7 +64,7 @@ class TelegramMessageFormatter:
             'completed': '✅',
             'failed': '❌'
         }
-        
+
         step_text = {
             'queued': '队列中',
             'downloading': '下载视频',
@@ -76,19 +75,24 @@ class TelegramMessageFormatter:
             'initialized': '初始化',
             'finished': '已完成'
         }
-        
+
         emoji = status_emoji.get(status, '🔄')
         step = step_text.get(current_step, current_step)
-        
+
+        # 进度条可视化
+        bar_length = 10
+        filled = int(progress / 10)
+        bar = '█' * filled + '░' * (bar_length - filled)
+
         return f"""
-{emoji} *任务进度更新*
+{emoji} *处理中...*
 
-🆔 *任务ID*: `{task_id}`
-🎯 *标题*: {title}
-📊 *进度*: {progress}%
-🔄 *当前步骤*: {step}
+🎯 {title}
 
-⏱️ *更新时间*: {updated_time}
+📊 进度: {bar} {progress}%
+🔄 {step}
+
+🆔 `{task_id}`
         """.strip()
     
     @staticmethod
@@ -98,13 +102,22 @@ class TelegramMessageFormatter:
         result = data.get('result', {})
         text_content = result.get('text', 'N/A') if result else 'N/A'
         updated_time = data.get('updated_time', 'N/A')
-        
-        # 限制转录文本长度
-        if len(text_content) > 1000:
-            display_text = text_content[:1000] + "\n\n...[文本过长，已截断]"
+
+        # Telegram 消息长度限制为 4096 字符
+        # 预留空间给格式化内容，文本内容限制为 3000 字符
+        MAX_TEXT_LENGTH = 3000
+        PREVIEW_LENGTH = 500
+
+        # 判断文本长度
+        if len(text_content) > MAX_TEXT_LENGTH:
+            # 长文本：只显示预览
+            display_text = text_content[:PREVIEW_LENGTH] + "\n\n...[文本较长，完整内容已作为文件发送]"
+            file_hint = "\n\n📎 *完整转录文本已作为文件发送，请查看附件*"
         else:
+            # 短文本：完整显示
             display_text = text_content
-        
+            file_hint = ""
+
         return f"""
 ✅ *转录任务完成*
 
@@ -116,9 +129,7 @@ class TelegramMessageFormatter:
 {display_text}
 ```
 
-⏱️ *完成时间*: {updated_time}
-
-💡 *如需完整转录文本，请查看下载的文本文件*
+⏱️ *完成时间*: {updated_time}{file_hint}
         """.strip()
     
     @staticmethod

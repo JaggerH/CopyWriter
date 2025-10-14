@@ -107,6 +107,9 @@ services:
       - redis
     networks:
       - app-network
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     command: python -u main.py
     # No ports exposed - bot uses Telegram's servers
 networks:

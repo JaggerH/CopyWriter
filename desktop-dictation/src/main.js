@@ -39,9 +39,11 @@ let isRecording = false;
 let tray = null;
 
 function createOverlayWindow() {
+  console.log('[DEBUG] Creating overlay window...');
+
   overlayWindow = new BrowserWindow({
-    width: 200,
-    height: 200,
+    width: 240,
+    height: 120,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -49,23 +51,51 @@ function createOverlayWindow() {
     resizable: false,
     focusable: false,
     show: false,
+    opacity: 1.0,
+    hasShadow: false,
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false
+      contextIsolation: false,
+      offscreen: false
     }
   });
 
-  overlayWindow.loadFile(path.join(__dirname, 'overlay.html'));
+  const overlayPath = path.join(__dirname, 'overlay.html');
+  console.log('[DEBUG] Loading overlay from:', overlayPath);
+
+  overlayWindow.loadFile(overlayPath);
   overlayWindow.setIgnoreMouseEvents(true);
 
-  // Position at bottom center of screen
+  // Position at bottom center of the screen where the cursor is
   const { screen } = require('electron');
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width, height } = primaryDisplay.workAreaSize;
-  overlayWindow.setPosition(
-    Math.floor(width / 2 - 100),
-    Math.floor(height - 250)
-  );
+  const cursorPoint = screen.getCursorScreenPoint();
+  const currentDisplay = screen.getDisplayNearestPoint(cursorPoint);
+
+  console.log('[DEBUG] Cursor position:', cursorPoint);
+  console.log('[DEBUG] Current display:', currentDisplay.bounds);
+
+  const { x: displayX, y: displayY, width, height } = currentDisplay.workArea;
+  const x = displayX + Math.floor(width / 2 - 120);  // Center on current display
+  const y = displayY + height - 200;                  // Bottom of current display
+
+  console.log('[DEBUG] Screen size:', width, 'x', height);
+  console.log('[DEBUG] Overlay position:', x, ',', y);
+
+  overlayWindow.setPosition(x, y);
+
+  // Set window level to ensure it's on top
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+
+  // Add error handler
+  overlayWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.error('[ERROR] Overlay failed to load:', errorCode, errorDescription);
+  });
+
+  overlayWindow.webContents.on('did-finish-load', () => {
+    console.log('[DEBUG] Overlay loaded successfully');
+  });
+
+  console.log('[DEBUG] Overlay window created');
 }
 
 function createHotwordsWindow() {
@@ -95,9 +125,27 @@ function createHotwordsWindow() {
 function startRecording() {
   if (isRecording) return;
 
+  console.log('[DEBUG] Starting recording...');
   isRecording = true;
+
+  // Check if overlayWindow exists
+  if (!overlayWindow) {
+    console.error('[ERROR] overlayWindow is null!');
+    return;
+  }
+
+  if (overlayWindow.isDestroyed()) {
+    console.error('[ERROR] overlayWindow is destroyed!');
+    return;
+  }
+
+  console.log('[DEBUG] Showing overlay window...');
   overlayWindow.show();
+  console.log('[DEBUG] Overlay visibility:', overlayWindow.isVisible());
+  console.log('[DEBUG] Overlay position:', overlayWindow.getBounds());
+
   audioRecorder.start();
+  console.log('[DEBUG] Audio recorder started');
 }
 
 function stopRecording() {
@@ -124,43 +172,53 @@ function stopRecording() {
 function registerGlobalShortcut() {
   const { uIOhook, UiohookKey } = require('uiohook-napi');
 
-  let ctrlPressed = false;
-  let winPressed = false;
+  // Use Set to track currently pressed keys (avoids state desync issues)
+  const pressedKeys = new Set();
+  let stateResetTimer = null;
+
+  // Check current key state and trigger/stop recording accordingly
+  function checkAndTrigger() {
+    const hasCtrl = pressedKeys.has(UiohookKey.Ctrl) ||
+                    pressedKeys.has(UiohookKey.CtrlRight);
+    const hasWin = pressedKeys.has(3675) || pressedKeys.has(3676);
+
+    if (hasCtrl && hasWin && !isRecording) {
+      console.log('Ctrl+Win pressed - starting recording');
+      startRecording();
+    } else if (isRecording && (!hasCtrl || !hasWin)) {
+      console.log('Ctrl+Win released - stopping recording');
+      stopRecording();
+    }
+  }
+
+  // Auto-reset state after 3 seconds of no keyboard activity (fixes stuck keys)
+  function resetStateAfterDelay() {
+    if (stateResetTimer) clearTimeout(stateResetTimer);
+
+    stateResetTimer = setTimeout(() => {
+      if (pressedKeys.size > 0) {
+        console.warn('Keyboard state timeout - force resetting stuck keys:', Array.from(pressedKeys));
+        pressedKeys.clear();
+        if (isRecording) {
+          console.warn('Force stopping recording due to stuck keys');
+          stopRecording();
+        }
+      }
+    }, 3000); // 3 seconds timeout
+  }
 
   // Listen for key down events
   uIOhook.on('keydown', (e) => {
-    // Check for Ctrl key (left or right)
-    if (e.keycode === UiohookKey.Ctrl || e.keycode === UiohookKey.CtrlRight) {
-      ctrlPressed = true;
-    }
-    // Check for Windows key (3675 for left Win, 3676 for right Win on Windows)
-    if (e.keycode === 3675 || e.keycode === 3676) {
-      winPressed = true;
-    }
-
-    // Start recording ONLY when BOTH Ctrl AND Windows are pressed (not Alt!)
-    if (ctrlPressed && winPressed && !isRecording) {
-      console.log('Ctrl+Win pressed - starting recording');
-      startRecording();
-    }
+    pressedKeys.add(e.keycode);
+    checkAndTrigger();
+    resetStateAfterDelay();
   });
 
   // Listen for key up events
   uIOhook.on('keyup', (e) => {
-    // Check for Ctrl key release
-    if (e.keycode === UiohookKey.Ctrl || e.keycode === UiohookKey.CtrlRight) {
-      ctrlPressed = false;
-    }
-    // Check for Windows key release
-    if (e.keycode === 3675 || e.keycode === 3676) {
-      winPressed = false;
-    }
-
-    // Stop recording when either key is released
-    if (isRecording && (!ctrlPressed || !winPressed)) {
-      console.log('Ctrl+Win released - stopping recording');
-      stopRecording();
-    }
+    pressedKeys.delete(e.keycode);
+    checkAndTrigger();
+    resetStateAfterDelay();
   });
 
   // Start the hook
