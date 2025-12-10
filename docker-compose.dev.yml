@@ -100,6 +100,7 @@ services:
       - "8083:8000"  # 暴露回调 API 端口
     volumes:
       - ./services/telegram-bot:/app  # 代码热重载
+      - media-pipeline:/app/media  # 访问共享媒体文件
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - ORCHESTRATOR_URL=http://orchestrator-service:8000
