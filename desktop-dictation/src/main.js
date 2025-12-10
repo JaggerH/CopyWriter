@@ -37,6 +37,7 @@ let asrService = null;
 let textInserter = null;
 let isRecording = false;
 let tray = null;
+let recordingStartTime = null;
 
 function createOverlayWindow() {
   console.log('[DEBUG] Creating overlay window...');
@@ -127,6 +128,7 @@ function startRecording() {
 
   console.log('[DEBUG] Starting recording...');
   isRecording = true;
+  recordingStartTime = Date.now();
 
   // Check if overlayWindow exists
   if (!overlayWindow) {
@@ -154,8 +156,18 @@ function stopRecording() {
   isRecording = false;
   overlayWindow.hide();
 
+  // Calculate recording duration
+  const recordingDuration = (Date.now() - recordingStartTime) / 1000;
+  console.log(`[DEBUG] Recording duration: ${recordingDuration.toFixed(2)}s`);
+
   audioRecorder.stop(async (audioBuffer) => {
     try {
+      // Check minimum duration (1.2 seconds)
+      if (recordingDuration < 1.2) {
+        console.log('[DEBUG] Recording too short, skipping ASR');
+        return;
+      }
+
       // Send to ASR service
       const text = await asrService.transcribe(audioBuffer);
 
@@ -175,6 +187,7 @@ function registerGlobalShortcut() {
   // Use Set to track currently pressed keys (avoids state desync issues)
   const pressedKeys = new Set();
   let stateResetTimer = null;
+  let recordingDelayTimer = null;
 
   // Check current key state and trigger/stop recording accordingly
   function checkAndTrigger() {
@@ -183,11 +196,38 @@ function registerGlobalShortcut() {
     const hasWin = pressedKeys.has(3675) || pressedKeys.has(3676);
 
     if (hasCtrl && hasWin && !isRecording) {
-      console.log('Ctrl+Win pressed - starting recording');
-      startRecording();
+      // Cancel any pending recording delay
+      if (recordingDelayTimer) {
+        clearTimeout(recordingDelayTimer);
+      }
+
+      // Delay 0.5s before starting recording
+      console.log('Ctrl+Win pressed - waiting 0.5s before starting recording');
+      recordingDelayTimer = setTimeout(() => {
+        // Double check keys are still pressed after delay
+        const stillHasCtrl = pressedKeys.has(UiohookKey.Ctrl) ||
+                             pressedKeys.has(UiohookKey.CtrlRight);
+        const stillHasWin = pressedKeys.has(3675) || pressedKeys.has(3676);
+
+        if (stillHasCtrl && stillHasWin && !isRecording) {
+          console.log('0.5s delay passed - starting recording');
+          startRecording();
+        } else {
+          console.log('Keys released during delay - recording cancelled');
+        }
+        recordingDelayTimer = null;
+      }, 500); // 0.5 seconds delay
     } else if (isRecording && (!hasCtrl || !hasWin)) {
-      console.log('Ctrl+Win released - stopping recording');
+      // Immediately stop recording when keys are released
+      console.log('Ctrl+Win released - stopping recording immediately');
       stopRecording();
+    } else if (!hasCtrl || !hasWin) {
+      // Keys released before recording started - cancel the delay timer
+      if (recordingDelayTimer) {
+        console.log('Keys released before 0.5s delay - cancelling recording start');
+        clearTimeout(recordingDelayTimer);
+        recordingDelayTimer = null;
+      }
     }
   }
 
@@ -202,6 +242,10 @@ function registerGlobalShortcut() {
         if (isRecording) {
           console.warn('Force stopping recording due to stuck keys');
           stopRecording();
+        }
+        if (recordingDelayTimer) {
+          clearTimeout(recordingDelayTimer);
+          recordingDelayTimer = null;
         }
       }
     }, 3000); // 3 seconds timeout

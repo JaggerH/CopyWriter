@@ -19,9 +19,24 @@
 4. 处理完成后，orchestrator 通过 Telegram API 直接发送结果给用户
 
 ### 配置需求
-- `TELEGRAM_BOT_TOKEN`: Telegram Bot token
-- `ORCHESTRATOR_URL`: orchestrator 服务地址
-- `ORCHESTRATOR_TIMEOUT`: API 调用超时时间
+
+**重要**: 所有配置在**项目根目录**的 `.env` 文件中（不是本目录）。
+
+```bash
+# 在项目根目录创建 .env 文件
+cp .env.example .env
+
+# 编辑配置，填入你的 Telegram Bot Token
+# TELEGRAM_BOT_TOKEN=your_bot_token_here
+```
+
+必需配置：
+- `TELEGRAM_BOT_TOKEN`: Telegram Bot token (从 @BotFather 获取)
+
+可选配置（有默认值）：
+- `ORCHESTRATOR_URL`: orchestrator 服务地址 (默认: http://orchestrator-service:8000)
+- `ORCHESTRATOR_TIMEOUT`: API 调用超时时间 (默认: 30秒)
+- `TELEGRAM_WEBHOOK_ENABLED`: 是否启用 Webhook (默认: false, 使用 polling)
 
 ## 与原版本的对比
 

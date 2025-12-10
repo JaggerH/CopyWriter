@@ -142,6 +142,40 @@ python -m pytest tests/test_utils.py -v  # Run specific module tests
 6. Progress updates sent back to user
 7. Completion notification with file info
 
+## Environment Configuration
+
+### Unified .env File
+
+**CRITICAL**: All service configurations use a single `.env` file in the **project root directory**.
+
+**Setup**:
+```bash
+# Copy the example file
+cp .env.example .env
+
+# Edit with your actual credentials
+# Required for Telegram Bot:
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+
+# Required for WeChat Work Bot:
+WECOM_CORP_ID=your_corp_id_here
+WECOM_AGENT_ID=your_agent_id_here
+WECOM_SECRET=your_secret_here
+```
+
+**How it works**:
+- Docker Compose automatically reads `.env` from the project root
+- Environment variables are injected into all service containers
+- Individual services read config via `os.getenv()`
+- **Never commit `.env`** - it's in `.gitignore`
+- `.env.example` is the template for sharing
+
+**Services using .env**:
+- `orchestrator-service`: Reads service URLs
+- `telegram-bot`: Reads `TELEGRAM_BOT_TOKEN`
+- `wecom-bot`: Reads `WECOM_CORP_ID`, `WECOM_AGENT_ID`, `WECOM_SECRET`
+- All services: Read Redis, logging configs
+
 ## Microservices Architecture
 
 ### Project Location

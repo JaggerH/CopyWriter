@@ -8,7 +8,16 @@
       "Bash(python test_bilibili_crawler.py:*)",
       "Bash(cat:*)",
       "WebSearch",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(npm install:*)",
+      "Bash(npx:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npm start)",
+      "Bash(docker logs:*)",
+      "Bash(npm run build:win:*)",
+      "Bash(docker-compose:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(conda activate copywriter)"
     ],
     "deny": [],
     "ask": []

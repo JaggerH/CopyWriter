@@ -80,6 +80,8 @@ services:
       - ASR_SERVICE_URL=http://asr-service:8000
       - REDIS_URL=redis://redis:6379/0
       - MEDIA_PATH=/app/media
+      - TELEGRAM_BOT_SERVICE_URL=http://telegram-bot:8000
+      - WECOM_BOT_SERVICE_URL=http://wecom-bot:8084
       - LOG_LEVEL=DEBUG
       - FLASK_ENV=development
       - FLASK_DEBUG=1
@@ -116,6 +118,32 @@ services:
       - 8.8.4.4
     command: python -u main.py
     # No ports exposed - bot uses Telegram's servers
+
+  # 5. WeChat Work Bot 服务
+  wecom-bot:
+    build: ./services/wecom-bot
+    container_name: copywriter-wecom-bot-dev
+    ports:
+      - "8084:8084"  # 暴露回调 API 端口
+    volumes:
+      - ./services/wecom-bot:/app  # 代码热重载
+      - media-pipeline:/app/media  # 访问媒体文件
+    environment:
+      - WECOM_CORP_ID=${WECOM_CORP_ID}
+      - WECOM_AGENT_ID=${WECOM_AGENT_ID}
+      - WECOM_SECRET=${WECOM_SECRET}
+      - ORCHESTRATOR_URL=http://orchestrator-service:8000
+      - CALLBACK_PORT=8084
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    depends_on:
+      - orchestrator-service
+      - redis
+    networks:
+      - app-network
+    restart: unless-stopped
+    command: python -u main.py
+
 networks:
   app-network:
     driver: bridge
