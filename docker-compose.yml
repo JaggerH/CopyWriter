@@ -68,6 +68,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - MEDIA_PATH=/app/media
       - TELEGRAM_BOT_SERVICE_URL=http://telegram-bot:8000  # Telegram Bot 服务回调 URL
+      - TASK_AUTO_CLEANUP=${TASK_AUTO_CLEANUP:-true}
+      - TASK_TTL_SECONDS=${TASK_TTL_SECONDS:-3600}
     depends_on:
       - redis
       - video-service
@@ -87,7 +89,7 @@ services:
     networks:
       - app-network
     restart: always
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --notify-keyspace-events Ex
 
   # 4. Telegram Bot 服务 (混合: Bot + 回调 API)
   telegram-bot:

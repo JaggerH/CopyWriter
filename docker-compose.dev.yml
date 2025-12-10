@@ -23,7 +23,7 @@ services:
     networks:
       - app-network
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --notify-keyspace-events Ex
   video-service:
     build: 
       context: ./services/Douyin_TikTok_Download_API
@@ -81,6 +81,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - MEDIA_PATH=/app/media
       - TELEGRAM_BOT_SERVICE_URL=http://telegram-bot:8000
+      - TASK_AUTO_CLEANUP=${TASK_AUTO_CLEANUP:-true}
+      - TASK_TTL_SECONDS=${TASK_TTL_SECONDS:-3600}
       - LOG_LEVEL=DEBUG
       - FLASK_ENV=development
       - FLASK_DEBUG=1
