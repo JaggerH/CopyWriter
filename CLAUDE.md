@@ -27,6 +27,13 @@ CopyWriter is an automated audio/video transcription tool that monitors folders 
 ## Development Commands
 
 ### Environment Setup
+
+**CRITICAL: Always activate the conda environment before running any commands or tests:**
+```bash
+conda activate copywriter
+```
+
+Initial setup:
 ```bash
 conda create -n copywriter python=3.11
 conda activate copywriter
@@ -134,3 +141,90 @@ python -m pytest tests/test_utils.py -v  # Run specific module tests
 5. Downloads video using integrated Bili23-Downloader
 6. Progress updates sent back to user
 7. Completion notification with file info
+
+## Microservices Architecture
+
+### Project Location
+- **Path**: Root directory (services/, shared/)
+- **Documentation**: `README_microservices.md`
+
+### Architecture Overview
+The project includes a full microservices version with GPU acceleration:
+- **video-service** (8080): Video parsing and download using Douyin_TikTok_Download_API
+- **asr-service** (8082): GPU-accelerated ASR using NVIDIA containers
+- **orchestrator-service** (8081): API Gateway with FFmpeg conversion
+- **redis** (6379): Task queue and caching layer
+
+### Microservices Commands
+```bash
+# Build and start all services (requires NVIDIA GPU)
+docker-compose up --build
+
+# Start specific services
+docker-compose up video-service redis
+
+# View service logs
+docker-compose logs -f orchestrator-service
+
+# Clean rebuild
+docker-compose down && docker-compose up --build
+```
+
+### Service URLs
+- **Main API**: http://localhost:8081/api/process-video
+- **Video Service**: http://localhost:8080
+- **ASR Service**: http://localhost:8082
+- **Redis**: localhost:6379
+
+### Multi-Platform Support
+
+The project now supports multiple video platforms through the microservices architecture:
+
+#### Telegram Bot Extensions
+- **Path**: `telegram_bot/src/parsers/` and `telegram_bot/src/downloaders/`
+- **Multi-platform bot**: `telegram_bot/src/multi_platform_bot_integration.py`
+- **Platform adapters**: Bilibili, Douyin/TikTok support
+- **Factory pattern**: `telegram_bot/src/downloaders/downloader_factory.py`
+
+#### Running Multi-Platform Bot
+```bash
+cd telegram_bot
+# Install multi-platform dependencies
+pip install -r requirements_multi_platform.txt
+
+# Run combined bot and worker
+python run_all.py
+
+# Run components separately  
+python run_bot.py    # Bot only
+python run_worker.py # Worker only
+```
+
+#### Platform-Specific Testing
+```bash
+cd telegram_bot
+# Test specific platform integration
+python test_callback_integration.py
+python test_asr_fix.py
+```
+
+## Utility Scripts
+
+### Queue Management
+- **clear_queue.py**: Interactive Redis queue cleaner for Telegram bot tasks
+- **Usage**: `python clear_queue.py` - provides menu to clear specific or all queues
+
+### Testing Framework
+The project uses comprehensive testing with pytest:
+```bash
+cd telegram_bot
+python -m pytest                    # Run all tests
+python -m pytest -v --cov=src      # Run with coverage report  
+python -m pytest tests/test_utils.py -v # Run specific module
+python -m pytest -m "not slow"     # Skip slow integration tests
+```
+
+Test configuration in `telegram_bot/pytest.ini` includes:
+- Coverage reporting with HTML output
+- Test markers for slow/integration tests
+- Strict marker enforcement

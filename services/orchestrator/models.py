@@ -14,6 +14,7 @@ class TaskStatus(Enum):
 class CallbackType(Enum):
     WEBSOCKET = "websocket"
     TELEGRAM = "telegram"
+    WECOM = "wecom"
     NOTION = "notion"
 
 class NotificationConfig(BaseModel):
@@ -23,6 +24,9 @@ class NotificationConfig(BaseModel):
     chat_id: Optional[str] = None
     user_id: Optional[str] = None
     message_id: Optional[str] = None
+    # For WeChat callbacks
+    wecom_user_id: Optional[str] = None
+    wecom_agent_id: Optional[str] = None
     # For future Notion callbacks
     notion_page_id: Optional[str] = None
     # Generic callback data

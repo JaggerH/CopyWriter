@@ -117,17 +117,78 @@ class TelegramProvider(NotificationProvider):
         return CallbackType.TELEGRAM
 
 
+class WeComProvider(NotificationProvider):
+    """企业微信通知提供者 - 通过 HTTP 回调"""
+
+    def __init__(self, wecom_bot_service_url: str):
+        self.wecom_bot_service_url = wecom_bot_service_url.rstrip('/')
+
+    async def send_notification(self, message: NotificationMessage) -> bool:
+        if not message.notification_config or not message.notification_config.wecom_user_id:
+            logger.warning(f"Missing wecom_user_id for WeChat notification: {message.task_id}")
+            return False
+
+        try:
+            # 构建回调数据
+            callback_data = {
+                "wecom_user_id": message.notification_config.wecom_user_id,
+                "message_type": message.message_type,
+                "task_id": message.task_id,
+                "task_data": message.data
+            }
+
+            # 选择合适的端点
+            endpoint_map = {
+                "task_created": "/api/callback/task_created",
+                "task_update": "/api/callback/task_update",
+                "task_completed": "/api/callback/task_completed",
+                "task_failed": "/api/callback/task_failed",
+                "task_title_updated": "/api/callback/task_title_updated"
+            }
+
+            endpoint = endpoint_map.get(message.message_type, "/api/callback")
+            url = f"{self.wecom_bot_service_url}{endpoint}"
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(url, json=callback_data)
+
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get("success"):
+                        logger.info(f"WeChat callback sent successfully for task {message.task_id}")
+                        return True
+                    else:
+                        logger.warning(f"WeChat callback failed: {result.get('message', 'Unknown error')}")
+                        return False
+                else:
+                    logger.error(f"WeChat callback HTTP error: {response.status_code} - {response.text}")
+                    return False
+
+        except httpx.TimeoutException:
+            logger.error(f"WeChat callback timeout for task {message.task_id}")
+            return False
+        except httpx.ConnectError:
+            logger.error(f"Cannot connect to wecom-bot service at {self.wecom_bot_service_url}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to send WeChat callback: {e}")
+            return False
+
+    def get_provider_type(self) -> CallbackType:
+        return CallbackType.WECOM
+
+
 class NotionProvider(NotificationProvider):
     """Notion 通知提供者（未来实现）"""
-    
+
     def __init__(self, api_key: str):
         self.api_key = api_key
-    
+
     async def send_notification(self, message: NotificationMessage) -> bool:
         # TODO: 实现 Notion 集成
         logger.info(f"Notion notification for task {message.task_id} (not implemented)")
         return True
-    
+
     def get_provider_type(self) -> CallbackType:
         return CallbackType.NOTION
 
@@ -149,7 +210,15 @@ class UnifiedNotificationManager:
             logger.info(f"Telegram notification provider initialized (callback URL: {telegram_bot_url})")
         except Exception as e:
             logger.error(f"Failed to initialize Telegram provider: {e}")
-        
+
+        # 初始化企业微信提供者（HTTP 回调）
+        wecom_bot_url = os.getenv("WECOM_BOT_SERVICE_URL", "http://wecom-bot:8084")
+        try:
+            self.providers[CallbackType.WECOM] = WeComProvider(wecom_bot_url)
+            logger.info(f"WeChat Work notification provider initialized (callback URL: {wecom_bot_url})")
+        except Exception as e:
+            logger.error(f"Failed to initialize WeChat Work provider: {e}")
+
         # 初始化 Notion 提供者（如果配置了）
         notion_key = os.getenv("NOTION_API_KEY")
         if notion_key:

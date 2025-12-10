@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -94,6 +94,32 @@ def get_notification_manager():
 # 初始化URL解析器
 url_parser = VideoURLParser()
 
+class ProcessMediaRequest(BaseModel):
+    """统一媒体处理请求（支持视频和图片）"""
+    url: str
+    quality: Optional[str] = "4"
+    with_watermark: Optional[bool] = False
+    notification: Optional[NotificationConfig] = None
+
+class ProcessMediaResponse(BaseModel):
+    """统一媒体处理响应"""
+    task_id: str
+    status: str
+    message: str
+    title: str
+    platform: str  # douyin, tiktok, bilibili
+    content_type: str  # video, image
+    result: Optional[Dict] = None
+
+class DetectTypeResponse(BaseModel):
+    """内容类型检测响应"""
+    platform: str
+    content_type: str
+    aweme_type: int
+    clean_url: str
+    title: str
+
+# Legacy - for backward compatibility (will be removed)
 class ProcessVideoRequest(BaseModel):
     url: str
     chat_id: Optional[str] = None
@@ -148,11 +174,109 @@ def get_clean_video_url(input_text: str) -> str:
         clean_url = url_parser.get_clean_url(input_text)
         if clean_url:
             return clean_url
-        
+
         # 如果没有找到支持的平台URL，返回原始输入（假设它就是URL）
         return input_text.strip()
     except:
         return input_text.strip()
+
+async def detect_content_info(url: str) -> dict:
+    """
+    识别链接的平台和内容类型
+
+    流程:
+    1. 清理URL
+    2. 调用 video-service 的 /api/hybrid/video_data 接口
+    3. 解析平台 (douyin/tiktok/bilibili)
+    4. 解析类型 (video/image)
+    5. 返回完整识别结果
+
+    Args:
+        url: 原始URL或分享文本
+
+    Returns:
+        {
+            "platform": "douyin" | "tiktok" | "bilibili" | "unknown",
+            "content_type": "video" | "image",
+            "aweme_type": int,  # 原始类型代码
+            "clean_url": str,
+            "title": str,
+            "error": None | str
+        }
+    """
+    try:
+        # 步骤1: 清理URL
+        clean_url = get_clean_video_url(url)
+        logger.info(f"[ContentDetection] Analyzing URL: {clean_url}")
+
+        # 步骤2: 调用 video-service 识别
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.get(
+                f"{VIDEO_SERVICE_URL}/api/hybrid/video_data",
+                params={"url": clean_url, "minimal": "true"}
+            )
+
+            if response.status_code != 200:
+                error_msg = f"Failed to detect type: HTTP {response.status_code}"
+                logger.error(f"[ContentDetection] {error_msg}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"无法识别链接类型: {error_msg}"
+                )
+
+            result = response.json()
+            data = result.get('data', {})
+
+            # 步骤3: 提取平台信息
+            platform = data.get('platform', 'unknown')
+
+            # 步骤4: 提取类型信息
+            content_type = data.get('type', 'video')
+
+            # 提取原始 aweme_type
+            aweme_type = data.get('aweme_type', 0)
+
+            # 提取标题
+            title = data.get('desc', '') or extract_title_from_url_or_text(url)
+
+            logger.info(
+                f"[ContentDetection] ✓ Detected - "
+                f"Platform: {platform}, "
+                f"Type: {content_type}, "
+                f"AwemeType: {aweme_type}, "
+                f"Title: {title[:30]}..."
+            )
+
+            return {
+                "platform": platform,
+                "content_type": content_type,
+                "aweme_type": aweme_type,
+                "clean_url": clean_url,
+                "title": title,
+                "error": None
+            }
+
+    except httpx.TimeoutException as e:
+        error_msg = f"请求超时: {str(e)}"
+        logger.error(f"[ContentDetection] {error_msg}")
+        raise HTTPException(status_code=504, detail=f"识别超时: {error_msg}")
+    except httpx.ConnectError as e:
+        error_msg = f"连接失败: {str(e)}"
+        logger.error(f"[ContentDetection] {error_msg}")
+        raise HTTPException(status_code=503, detail=f"无法连接到视频服务: {error_msg}")
+    except httpx.HTTPStatusError as e:
+        error_msg = f"HTTP错误: {e}"
+        logger.error(f"[ContentDetection] {error_msg}")
+        raise HTTPException(status_code=502, detail=f"视频服务错误: {error_msg}")
+    except HTTPException:
+        raise  # 重新抛出 HTTP 异常
+    except Exception as e:
+        error_msg = f"未知错误: {str(e)}"
+        logger.error(f"[ContentDetection] {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"无法识别链接类型: {error_msg}"
+        )
 
 # 保持向后兼容性的包装函数
 async def notify_websocket_clients(message_type: str, task_id: str, data: dict):
@@ -295,54 +419,223 @@ async def create_task(request: CreateTaskRequest, background_tasks: BackgroundTa
         title=title
     )
 
-@app.post("/api/process-video", response_model=ProcessVideoResponse)
-async def process_video(request: ProcessVideoRequest, background_tasks: BackgroundTasks):
+@app.post("/api/process-media", response_model=ProcessMediaResponse)
+async def process_media(request: ProcessMediaRequest, background_tasks: BackgroundTasks):
     """
-    处理视频的主入口
-    1. 下载视频
-    2. 转换格式
-    3. 语音识别
-    4. 返回结果
+    处理媒体内容的统一入口（智能路由）
+
+    支持的平台：
+    - 抖音 (Douyin)
+    - TikTok
+    - Bilibili
+
+    支持的类型：
+    - 视频：下载 → 转码 → ASR 转录
+    - 图片：下载图集
+
+    流程：
+    1. 识别平台和内容类型
+    2. 创建任务
+    3. 智能路由到对应的处理管道
+    4. 返回任务信息
     """
     task_id = str(uuid.uuid4())
-    
-    # 保存任务状态到Redis
     r = await get_redis()
     created_time = datetime.now().isoformat()
-    
-    # 使用新的URL解析逻辑
-    clean_url = get_clean_video_url(request.url)
-    title = extract_title_from_url_or_text(request.url)
-    
+
+    # 🔍 步骤1: 识别平台和内容类型
+    content_info = await detect_content_info(request.url)
+
+    platform = content_info['platform']
+    content_type = content_info['content_type']
+    clean_url = content_info['clean_url']
+    title = content_info['title']
+
+    # 序列化 notification 配置
+    notification_config_json = None
+    if request.notification:
+        notification_config_json = request.notification.model_dump_json()
+
+    # 📝 步骤2: 保存任务到 Redis
     await r.hset(f"task:{task_id}", mapping={
         "status": "queued",
         "current_step": "initialized",
         "progress": "0",
         "url": clean_url,
-        "chat_id": request.chat_id or "",
         "title": title,
+        "platform": platform,  # 🆕 保存平台信息
+        "content_type": content_type,  # 🆕 保存内容类型
+        "aweme_type": str(content_info['aweme_type']),  # 🆕 保存原始类型
         "created_time": created_time,
-        "updated_time": created_time
+        "updated_time": created_time,
+        "notification_config": notification_config_json if notification_config_json else ""
     })
-    
-    # 创建一个使用清洁URL的ProcessVideoRequest对象传递给pipeline
-    clean_request = ProcessVideoRequest(
+
+    # 创建清理后的请求对象
+    clean_request = ProcessMediaRequest(
         url=clean_url,
         quality=request.quality,
         with_watermark=request.with_watermark,
-        chat_id=None  # 新任务API不使用chat_id
-    )
-    
-    # 后台执行任务
-    background_tasks.add_task(process_video_pipeline, task_id, clean_request)
-    
-    return ProcessVideoResponse(
-        task_id=task_id,
-        status="queued", 
-        message="任务已加入队列，开始处理"
+        notification=request.notification
     )
 
-async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
+    # 🚦 步骤3: 智能路由
+    if content_type == 'image':
+        logger.info(
+            f"[Task {task_id}] Routing to IMAGE pipeline - "
+            f"Platform: {platform}, URL: {clean_url}"
+        )
+        background_tasks.add_task(download_images_pipeline, task_id, clean_request)
+        message = f"图片下载任务已创建 (平台: {platform})"
+
+    else:  # video
+        logger.info(
+            f"[Task {task_id}] Routing to VIDEO pipeline - "
+            f"Platform: {platform}, URL: {clean_url}"
+        )
+        background_tasks.add_task(process_video_pipeline, task_id, clean_request)
+        message = f"视频处理任务已创建 (平台: {platform})"
+
+    return ProcessMediaResponse(
+        task_id=task_id,
+        status="queued",
+        message=message,
+        title=title,
+        platform=platform,
+        content_type=content_type
+    )
+
+
+@app.get("/api/detect-type", response_model=DetectTypeResponse)
+async def detect_type(url: str = Query(..., description="媒体链接或分享文本")):
+    """
+    仅检测链接的平台和类型，不进行实际处理
+
+    用于前端或客户端预先判断内容类型
+
+    Returns:
+        平台、内容类型、原始类型代码、清理后的URL
+    """
+    content_info = await detect_content_info(url)
+
+    return DetectTypeResponse(
+        platform=content_info['platform'],
+        content_type=content_info['content_type'],
+        aweme_type=content_info['aweme_type'],
+        clean_url=content_info['clean_url'],
+        title=content_info['title']
+    )
+
+async def download_images_pipeline(task_id: str, request: ProcessMediaRequest):
+    """图片下载处理管道"""
+    r = await get_redis()
+
+    try:
+        # 步骤1: 下载图片
+        await update_task_status(r, task_id, "downloading", "下载图片", 50)
+        # request.url 已经是清理过的 URL，无需再次清理
+        image_result = await download_video(request.url, task_id, request.with_watermark)
+
+        if not image_result["success"]:
+            raise Exception(f"图片下载失败: {image_result.get('message')}")
+
+        # 检查是否为图片类型
+        if image_result.get("data_type") != "image":
+            raise Exception(f"URL不是图片类型，而是: {image_result.get('data_type')}")
+
+        # 获取图片文件列表
+        image_files = image_result["image_files"]
+
+        # 更新任务标题为实际标题
+        image_title = image_result.get("video_title", "")
+        if image_title:
+            updated_time = datetime.now().isoformat()
+            await r.hset(f"task:{task_id}", mapping={
+                "title": image_title,
+                "updated_time": updated_time
+            })
+
+        # 完成
+        result = {
+            "data_type": "image",  # 标记为图片类型
+            "image_files": image_files,  # 图片路径列表
+            "image_count": image_result.get("image_count", 0),
+            "platform": image_result.get("platform"),
+            "video_id": image_result.get("video_id")
+        }
+
+        updated_time = datetime.now().isoformat()
+        await r.hset(f"task:{task_id}", mapping={
+            "status": "completed",
+            "current_step": "finished",
+            "progress": "100",
+            "result": json.dumps(result),  # 使用JSON序列化而非str()
+            "updated_time": updated_time
+        })
+
+        # 获取任务数据和通知配置
+        task_data_full = await r.hgetall(f"task:{task_id}")
+        notification_config = None
+        if task_data_full and task_data_full.get(b"notification_config"):
+            try:
+                # import json removed - using global import
+                notification_dict = json.loads(task_data_full[b"notification_config"].decode())
+                notification_config = NotificationConfig(**notification_dict)
+            except Exception as e:
+                logger.error(f"Failed to parse notification config: {e}")
+
+        if task_data_full:
+            completion_data = {
+                "task_id": task_id,
+                "status": "completed",
+                "current_step": "finished",
+                "progress": 100,
+                "updated_time": updated_time,
+                "title": task_data_full.get(b"title", b"").decode(),
+                "result": result,
+                "url": task_data_full.get(b"url", b"").decode()
+            }
+            manager = get_notification_manager()
+            await manager.notify_task_completed(task_id, completion_data, notification_config)
+
+        logger.info(f"图片下载任务 {task_id} 处理完成")
+
+    except Exception as e:
+        logger.error(f"图片下载任务 {task_id} 处理失败: {str(e)}")
+        updated_time = datetime.now().isoformat()
+        await r.hset(f"task:{task_id}", mapping={
+            "status": "failed",
+            "current_step": "error",
+            "error": str(e),
+            "updated_time": updated_time
+        })
+
+        # 获取任务数据和通知配置
+        task_data_full = await r.hgetall(f"task:{task_id}")
+        notification_config = None
+        if task_data_full and task_data_full.get(b"notification_config"):
+            try:
+                # import json removed - using global import
+                notification_dict = json.loads(task_data_full[b"notification_config"].decode())
+                notification_config = NotificationConfig(**notification_dict)
+            except Exception as e:
+                logger.error(f"Failed to parse notification config: {e}")
+
+        if task_data_full:
+            failure_data = {
+                "task_id": task_id,
+                "status": "failed",
+                "current_step": "error",
+                "progress": int(task_data_full.get(b"progress", b"0").decode()),
+                "updated_time": updated_time,
+                "title": task_data_full.get(b"title", b"").decode(),
+                "error": str(e),
+                "url": task_data_full.get(b"url", b"").decode()
+            }
+            manager = get_notification_manager()
+            await manager.notify_task_failed(task_id, failure_data, notification_config)
+
+async def process_video_pipeline(task_id: str, request: ProcessMediaRequest):
     """视频处理管道"""
     r = await get_redis()
     
@@ -370,7 +663,6 @@ async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
             notification_config = None
             if task_data_full.get(b"notification_config"):
                 try:
-                    import json
                     notification_dict = json.loads(task_data_full[b"notification_config"].decode())
                     notification_config = NotificationConfig(**notification_dict)
                 except Exception as e:
@@ -403,18 +695,21 @@ async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
         
         # 完成
         result = {
-            "video_path": video_path,
-            "audio_path": audio_path,
-            "text_path": asr_result["output_path"],
-            "text": asr_result["text"]
+            "data_type": "video",  # 标记为视频类型
+            "video_file": video_path,
+            "audio_file": audio_path,
+            "text_file": asr_result["output_path"],
+            "text": asr_result["text"],
+            "platform": video_result.get("platform"),
+            "video_id": video_result.get("video_id")
         }
-        
+
         updated_time = datetime.now().isoformat()
         await r.hset(f"task:{task_id}", mapping={
             "status": "completed",
             "current_step": "finished",
             "progress": "100",
-            "result": str(result),
+            "result": json.dumps(result),  # 使用JSON序列化
             "updated_time": updated_time
         })
         
@@ -423,7 +718,7 @@ async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
         notification_config = None
         if task_data_full and task_data_full.get(b"notification_config"):
             try:
-                import json
+                # import json removed - using global import
                 notification_dict = json.loads(task_data_full[b"notification_config"].decode())
                 notification_config = NotificationConfig(**notification_dict)
             except Exception as e:
@@ -460,7 +755,7 @@ async def process_video_pipeline(task_id: str, request: ProcessVideoRequest):
         notification_config = None
         if task_data_full and task_data_full.get(b"notification_config"):
             try:
-                import json
+                # import json removed - using global import
                 notification_dict = json.loads(task_data_full[b"notification_config"].decode())
                 notification_config = NotificationConfig(**notification_dict)
             except Exception as e:
@@ -497,7 +792,6 @@ async def update_task_status(r, task_id: str, status: str, step: str, progress: 
     notification_config = None
     if task_data_full and task_data_full.get(b"notification_config"):
         try:
-            import json
             notification_dict = json.loads(task_data_full[b"notification_config"].decode())
             notification_config = NotificationConfig(**notification_dict)
         except Exception as e:
@@ -525,32 +819,77 @@ async def download_video(url: str, task_id: str, with_watermark: bool = False) -
             "prefix": True,
             "with_watermark": with_watermark
         }
-        
+
         # 使用普通的GET请求，但增加超时时间
         response = await client.get(f"{VIDEO_SERVICE_URL}/api/download_info", params=params)
-        
+
         if response.status_code == 200:
             result = response.json()
-            
+            logger.info(f"Video service response for {url}: success={result.get('success')}, data_type={result.get('data_type')}")
+
             if result.get("success"):
                 # video-service 已经下载文件到共享存储
                 # 我们只需要将文件路径转换为 orchestrator 的路径空间
                 original_file_path = result.get("file_path")
                 file_name = result.get("file_name")
-                
+                data_type = result.get("data_type", "video")
+                logger.debug(f"Processing download: file_path={original_file_path}, file_name={file_name}, data_type={data_type}")
+
                 # 将 video-service 的路径转换为 orchestrator 路径
                 # 因为两者都挂载了同一个 volume (media-pipeline)
                 # 处理相对路径和绝对路径两种情况
-                if original_file_path.startswith('./downloads'):
+                if original_file_path and original_file_path.startswith('./downloads'):
                     # 相对路径：./downloads/... → /app/media/...
                     shared_file_path = original_file_path.replace('./downloads', '/app/media')
-                elif original_file_path.startswith('/app/downloads'):
+                elif original_file_path and original_file_path.startswith('/app/downloads'):
                     # 绝对路径：/app/downloads/... → /app/media/...
                     shared_file_path = original_file_path.replace('/app/downloads', '/app/media')
-                else:
+                elif original_file_path:
                     # 其他情况，尝试构造正确路径
                     shared_file_path = f"/app/media/{original_file_path.lstrip('./')}"
-                
+                else:
+                    shared_file_path = None
+
+                # 处理图片类型
+                if data_type == "image":
+                    # 处理图片文件列表
+                    image_files = result.get("image_files", [])
+
+                    # 路径转换（多个文件）
+                    shared_image_paths = []
+                    for img_file_path in image_files:
+                        if not img_file_path:
+                            logger.warning(f"Empty image file path in result")
+                            continue
+
+                        # 转换路径
+                        if img_file_path.startswith('./downloads'):
+                            shared_path = img_file_path.replace('./downloads', '/app/media')
+                        elif img_file_path.startswith('/app/downloads'):
+                            shared_path = img_file_path.replace('/app/downloads', '/app/media')
+                        else:
+                            shared_path = f"/app/media/{img_file_path.lstrip('./')}"
+
+                        # 验证文件存在
+                        if os.path.exists(shared_path):
+                            shared_image_paths.append(shared_path)
+                        else:
+                            logger.warning(f"Image file not found: {shared_path}")
+
+                    return {
+                        "success": True,
+                        "data_type": "image",
+                        "image_files": shared_image_paths,  # 图片路径数组
+                        "image_count": len(shared_image_paths),
+                        "platform": result.get("platform"),
+                        "video_id": result.get("video_id"),
+                        "cached": result.get("cached", False),
+                        "message": result.get("message", "图片下载成功"),
+                        "video_title": result.get("video_title", ""),
+                        "video_info": result.get("video_info", {})
+                    }
+
+                # 处理视频类型
                 # 验证文件是否存在
                 if os.path.exists(shared_file_path):
                     return {
@@ -559,6 +898,7 @@ async def download_video(url: str, task_id: str, with_watermark: bool = False) -
                         "file_name": file_name,
                         "platform": result.get("platform"),
                         "video_id": result.get("video_id"),
+                        "data_type": data_type,
                         "cached": result.get("cached", False),
                         "message": result.get("message", "下载成功"),
                         "video_title": result.get("video_title", ""),  # 新增视频标题
