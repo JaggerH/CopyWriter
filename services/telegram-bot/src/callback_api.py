@@ -184,15 +184,22 @@ class CallbackAPIServer:
             # 查找是否已有状态消息
             status_message_id = self.status_messages.get(task_id)
 
-            # 检查是否需要发送文本文件（仅用于完成消息）
+            # 检查是否需要发送文本文件和视频文件（仅用于完成消息）
             should_send_file = False
+            should_send_video = False
             text_content = None
+            video_path = None
             title = "transcript"
 
             if callback_data.message_type == CallbackMessageType.TASK_COMPLETED:
                 result = callback_data.task_data.get('result', {})
                 text_content = result.get('text', '') if result else ''
                 title = callback_data.task_data.get('title', 'transcript')
+
+                # 检查是否是视频类型任务
+                if isinstance(result, dict) and result.get('data_type') == 'video':
+                    video_path = result.get('video_file')
+                    should_send_video = True
 
                 # 如果文本超过 3000 字符，需要发送文件
                 if len(text_content) > 3000:
@@ -214,6 +221,24 @@ class CallbackAPIServer:
                         f"Updated status message {status_message_id} for task {task_id} "
                         f"({callback_data.message_type.value})"
                     )
+
+                    # 如果需要发送视频文件,在编辑消息后发送
+                    if should_send_video and video_path:
+                        try:
+                            if os.path.exists(video_path):
+                                logger.info(f"Sending video file for task {task_id}: {video_path}")
+                                with open(video_path, 'rb') as video_file:
+                                    await self.bot.send_video(
+                                        chat_id=callback_data.chat_id,
+                                        video=video_file,
+                                        caption=f"🎬 {title}",
+                                        supports_streaming=True
+                                    )
+                                logger.info(f"Sent video file for task {task_id}")
+                            else:
+                                logger.warning(f"Video file not found: {video_path}")
+                        except TelegramError as e:
+                            logger.error(f"Failed to send video file for task {task_id}: {e}")
 
                     # 如果需要发送文件（长文本），在编辑消息后发送
                     if should_send_file and text_content:

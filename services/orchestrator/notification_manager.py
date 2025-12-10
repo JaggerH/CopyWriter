@@ -211,13 +211,16 @@ class UnifiedNotificationManager:
         except Exception as e:
             logger.error(f"Failed to initialize Telegram provider: {e}")
 
-        # 初始化企业微信提供者（HTTP 回调）
-        wecom_bot_url = os.getenv("WECOM_BOT_SERVICE_URL", "http://wecom-bot:8084")
-        try:
-            self.providers[CallbackType.WECOM] = WeComProvider(wecom_bot_url)
-            logger.info(f"WeChat Work notification provider initialized (callback URL: {wecom_bot_url})")
-        except Exception as e:
-            logger.error(f"Failed to initialize WeChat Work provider: {e}")
+        # 初始化企业微信提供者（HTTP 回调）- 仅在配置了服务 URL 时启用
+        wecom_bot_url = os.getenv("WECOM_BOT_SERVICE_URL")
+        if wecom_bot_url:
+            try:
+                self.providers[CallbackType.WECOM] = WeComProvider(wecom_bot_url)
+                logger.info(f"WeChat Work notification provider initialized (callback URL: {wecom_bot_url})")
+            except Exception as e:
+                logger.error(f"Failed to initialize WeChat Work provider: {e}")
+        else:
+            logger.debug("WeChat Work provider not configured (WECOM_BOT_SERVICE_URL not set)")
 
         # 初始化 Notion 提供者（如果配置了）
         notion_key = os.getenv("NOTION_API_KEY")
