@@ -3,7 +3,10 @@
 接收来自 orchestrator 的回调请求并发送 Telegram 消息
 """
 import asyncio
+import json
 import logging
+import os
+from typing import List
 from fastapi import FastAPI, HTTPException
 from telegram import Bot
 from telegram.error import TelegramError
@@ -104,6 +107,79 @@ class CallbackAPIServer:
                     message="Skipped duplicate task creation notification",
                     telegram_message_id=None
                 )
+
+            # 检查任务类型和结果数据
+            task_data = callback_data.task_data
+            result = task_data.get('result', {})
+
+            # 解析result（可能是JSON字符串）
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse result JSON for task {task_id}")
+                    result = {}
+
+            data_type = result.get('data_type') if isinstance(result, dict) else None
+
+            # 图片任务完成：发送图片相册
+            if (callback_data.message_type == CallbackMessageType.TASK_COMPLETED
+                and data_type == 'image'):
+
+                image_files = result.get('image_files', [])
+                title = task_data.get('title', '图片')
+
+                logger.info(f"Image task {task_id} completed, sending {len(image_files)} images to chat {callback_data.chat_id}")
+
+                # 编辑状态消息（如果存在）
+                status_message_id = self.status_messages.get(task_id)
+                if status_message_id:
+                    try:
+                        await self.bot.edit_message_text(
+                            chat_id=callback_data.chat_id,
+                            message_id=int(status_message_id),
+                            text=message_text,
+                            parse_mode='Markdown',
+                            disable_web_page_preview=True
+                        )
+                        logger.info(f"Updated status message {status_message_id} for image task {task_id}")
+                    except TelegramError as e:
+                        logger.warning(f"Failed to edit status message: {e}")
+
+                    # 清理状态消息映射
+                    del self.status_messages[task_id]
+                else:
+                    # 如果没有状态消息，发送一个
+                    try:
+                        await self.bot.send_message(
+                            chat_id=callback_data.chat_id,
+                            text=message_text,
+                            parse_mode='Markdown',
+                            disable_web_page_preview=True
+                        )
+                    except TelegramError as e:
+                        logger.warning(f"Failed to send completion message: {e}")
+
+                # 发送图片相册
+                if image_files:
+                    await self.send_images_smart(
+                        chat_id=callback_data.chat_id,
+                        image_files=image_files,
+                        title=title
+                    )
+
+                    return CallbackResponse(
+                        success=True,
+                        message=f"Sent {len(image_files)} images successfully",
+                        telegram_message_id=None
+                    )
+                else:
+                    logger.warning(f"Image task {task_id} completed but no image files found")
+                    return CallbackResponse(
+                        success=True,
+                        message="Image task completed but no files to send",
+                        telegram_message_id=None
+                    )
 
             # 查找是否已有状态消息
             status_message_id = self.status_messages.get(task_id)
@@ -215,7 +291,68 @@ class CallbackAPIServer:
         except Exception as e:
             logger.error(f"Unexpected error processing callback: {e}")
             raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-    
+
+    async def send_images_smart(self, chat_id: str, image_files: List[str], title: str):
+        """
+        智能发送图片：
+        - ≤10张: 使用 send_media_group 发送相册
+        - >10张: 分批发送，每批最多10张
+        """
+        from telegram import InputMediaPhoto
+
+        if not image_files:
+            logger.warning(f"No images to send for chat {chat_id}")
+            return
+
+        logger.info(f"Sending {len(image_files)} images to chat {chat_id}")
+
+        # 分批处理（每批最多10张）
+        batch_size = 10
+        batches = [image_files[i:i+batch_size]
+                   for i in range(0, len(image_files), batch_size)]
+
+        for batch_index, batch in enumerate(batches):
+            media_group = []
+
+            for img_path in batch:
+                # 验证文件存在
+                if not os.path.exists(img_path):
+                    logger.error(f"Image file not found: {img_path}")
+                    continue
+
+                # 读取图片文件
+                try:
+                    with open(img_path, 'rb') as f:
+                        # 为第一批的第一张图片添加标题
+                        caption = None
+                        if batch_index == 0 and img_path == batch[0]:
+                            if len(batches) > 1:
+                                caption = f"📷 {title} (批次 {batch_index+1}/{len(batches)})"
+                            else:
+                                caption = f"📷 {title}"
+
+                        media_group.append(
+                            InputMediaPhoto(
+                                media=f.read(),
+                                caption=caption
+                            )
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to read image file {img_path}: {e}")
+                    continue
+
+            if media_group:
+                try:
+                    await self.bot.send_media_group(
+                        chat_id=chat_id,
+                        media=media_group
+                    )
+                    logger.info(f"Sent batch {batch_index+1}/{len(batches)} ({len(media_group)} images) to chat {chat_id}")
+                except TelegramError as e:
+                    logger.error(f"Failed to send image batch {batch_index+1} to chat {chat_id}: {e}")
+
+        logger.info(f"Completed sending {len(image_files)} images in {len(batches)} batch(es) to chat {chat_id}")
+
     async def start_server(self, host: str = "0.0.0.0", port: int = 8000):
         """启动服务器"""
         import uvicorn

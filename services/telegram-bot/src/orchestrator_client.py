@@ -26,6 +26,8 @@ class CreateTaskResponse(BaseModel):
     status: str
     message: str
     title: str
+    platform: str  # douyin, tiktok, bilibili
+    content_type: str  # video, image
 
 
 class TaskDetailResponse(BaseModel):
@@ -68,10 +70,10 @@ class OrchestratorClient:
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
-                    f"{self.base_url}/api/tasks",
+                    f"{self.base_url}/api/process-media",  # 🆕 使用新的统一接口
                     json=request_data.dict()
                 )
-                
+
                 if response.status_code == 200:
                     data = response.json()
                     return CreateTaskResponse(**data)
