@@ -1,0 +1,4 @@
+[submodule "services/Douyin_TikTok_Download_API"]
+	path = services/Douyin_TikTok_Download_API
+	url = git@github.com:JaggerH/Douyin_TikTok_Download_API.git
+	branch = dynamic-update-cookie
