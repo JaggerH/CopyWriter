@@ -15,8 +15,10 @@ import json
 from datetime import datetime
 from urllib.parse import urlparse
 import re
+import shutil
+from pathlib import Path
 from models import (
-    TaskInfo, TaskListItem, TaskDetailResponse, CreateTaskRequest, 
+    TaskInfo, TaskListItem, TaskDetailResponse, CreateTaskRequest,
     CreateTaskResponse, TaskListResponse, WebSocketMessage, TaskStatus as TaskStatusEnum,
     NotificationConfig, CallbackType
 )
@@ -42,6 +44,10 @@ VIDEO_SERVICE_URL = os.getenv("VIDEO_SERVICE_URL", "http://video-service:80")
 ASR_SERVICE_URL = os.getenv("ASR_SERVICE_URL", "http://asr-service:8000")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 MEDIA_PATH = os.getenv("MEDIA_PATH", "/app/media")
+
+# 任务自动清理配置
+TASK_AUTO_CLEANUP = os.getenv("TASK_AUTO_CLEANUP", "true").lower() == "true"
+TASK_TTL_SECONDS = int(os.getenv("TASK_TTL_SECONDS", "3600"))  # 默认1小时后清理
 
 # Redis连接
 redis_client = None
@@ -389,6 +395,11 @@ async def create_task(request: CreateTaskRequest, background_tasks: BackgroundTa
     
     await r.hset(f"task:{task_id}", mapping=task_data)
     await r.zadd("tasks:created", {task_id: datetime.now().timestamp()})
+
+    # 设置任务过期时间（自动清理）
+    if TASK_AUTO_CLEANUP:
+        await r.expire(f"task:{task_id}", TASK_TTL_SECONDS)
+        logger.info(f"Task {task_id} will expire in {TASK_TTL_SECONDS} seconds")
     
     # 创建一个使用清洁URL的ProcessVideoRequest对象传递给pipeline
     clean_request = ProcessVideoRequest(
@@ -470,6 +481,11 @@ async def process_media(request: ProcessMediaRequest, background_tasks: Backgrou
         "updated_time": created_time,
         "notification_config": notification_config_json if notification_config_json else ""
     })
+
+    # 设置任务过期时间（自动清理）
+    if TASK_AUTO_CLEANUP:
+        await r.expire(f"task:{task_id}", TASK_TTL_SECONDS)
+        logger.info(f"Task {task_id} will expire in {TASK_TTL_SECONDS} seconds")
 
     # 创建清理后的请求对象
     clean_request = ProcessMediaRequest(
@@ -1164,7 +1180,7 @@ async def get_services_status():
             "video-service": VIDEO_SERVICE_URL,
             "asr-service": ASR_SERVICE_URL
         }
-        
+
         status = {}
         for name, base_url in services.items():
             try:
@@ -1178,8 +1194,151 @@ async def get_services_status():
                     "status": "unreachable",
                     "error": str(e)
                 }
-        
+
         return status
+
+# ========== 任务自动清理功能 ==========
+
+async def cleanup_task_files(task_id: str):
+    """
+    根据 task_id 清理所有相关文件
+
+    使用固定的文件命名规则推断文件位置：
+    - 视频: /app/media/{task_id}.* (mp4, webm, mkv等)
+    - 音频: /app/media/audio/{task_id}.mp3
+    - 转录: /app/media/text/{task_id}.txt
+    - 图片: /app/media/images/{task_id}/ (整个目录)
+    """
+    logger.info(f"Starting cleanup for task {task_id}")
+
+    files_deleted = 0
+    errors = []
+
+    try:
+        # 1. 清理视频文件（可能有多种扩展名）
+        media_dir = Path(MEDIA_PATH)
+        video_patterns = [f"{task_id}.*"]
+
+        for pattern in video_patterns:
+            for video_file in media_dir.glob(pattern):
+                if video_file.is_file():
+                    try:
+                        video_file.unlink()
+                        logger.info(f"Deleted video: {video_file}")
+                        files_deleted += 1
+                    except Exception as e:
+                        error_msg = f"Failed to delete video {video_file}: {e}"
+                        logger.error(error_msg)
+                        errors.append(error_msg)
+
+        # 2. 清理音频文件
+        audio_file = media_dir / "audio" / f"{task_id}.mp3"
+        if audio_file.exists():
+            try:
+                audio_file.unlink()
+                logger.info(f"Deleted audio: {audio_file}")
+                files_deleted += 1
+            except Exception as e:
+                error_msg = f"Failed to delete audio {audio_file}: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        # 3. 清理转录文本文件
+        text_file = media_dir / "text" / f"{task_id}.txt"
+        if text_file.exists():
+            try:
+                text_file.unlink()
+                logger.info(f"Deleted text: {text_file}")
+                files_deleted += 1
+            except Exception as e:
+                error_msg = f"Failed to delete text {text_file}: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        # 4. 清理图片目录（如果存在）
+        image_dir = media_dir / "images" / task_id
+        if image_dir.exists() and image_dir.is_dir():
+            try:
+                shutil.rmtree(image_dir)
+                logger.info(f"Deleted image directory: {image_dir}")
+                files_deleted += 1
+            except Exception as e:
+                error_msg = f"Failed to delete image directory {image_dir}: {e}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        logger.info(f"Cleanup completed for task {task_id}: {files_deleted} items deleted, {len(errors)} errors")
+
+    except Exception as e:
+        logger.error(f"Unexpected error during cleanup for task {task_id}: {e}")
+
+async def subscribe_redis_expirations():
+    """
+    订阅 Redis key 过期事件
+    当 task:{task_id} 过期时自动清理相关文件
+    """
+    if not TASK_AUTO_CLEANUP:
+        logger.info("Task auto-cleanup is disabled")
+        return
+
+    logger.info("Starting Redis expiration event subscriber...")
+
+    try:
+        r = await get_redis()
+
+        # 创建 pubsub 客户端（需要单独的连接）
+        pubsub = r.pubsub()
+
+        # 订阅 keyevent 过期事件
+        await pubsub.psubscribe('__keyevent@0__:expired')
+
+        logger.info("Successfully subscribed to Redis expiration events")
+
+        # 持续监听事件
+        async for message in pubsub.listen():
+            if message['type'] == 'pmessage':
+                expired_key = message['data'].decode() if isinstance(message['data'], bytes) else message['data']
+
+                # 只处理 task: 开头的 key
+                if expired_key.startswith('task:'):
+                    task_id = expired_key.replace('task:', '')
+                    logger.info(f"Detected expired task: {task_id}")
+
+                    # 异步清理文件
+                    asyncio.create_task(cleanup_task_files(task_id))
+
+    except asyncio.CancelledError:
+        logger.info("Redis expiration subscriber cancelled")
+        raise
+    except Exception as e:
+        logger.error(f"Error in Redis expiration subscriber: {e}")
+        # 等待一段时间后重试
+        await asyncio.sleep(5)
+        logger.info("Retrying Redis expiration subscriber...")
+        asyncio.create_task(subscribe_redis_expirations())
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时的初始化"""
+    logger.info("Orchestrator service starting up...")
+
+    # 启动 Redis 过期事件订阅器
+    if TASK_AUTO_CLEANUP:
+        asyncio.create_task(subscribe_redis_expirations())
+        logger.info(f"Task auto-cleanup enabled (TTL: {TASK_TTL_SECONDS}s)")
+    else:
+        logger.info("Task auto-cleanup disabled")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时的清理"""
+    logger.info("Orchestrator service shutting down...")
+
+    # 关闭 Redis 连接
+    global redis_client
+    if redis_client:
+        await redis_client.close()
+        logger.info("Redis connection closed")
 
 if __name__ == "__main__":
     import uvicorn
