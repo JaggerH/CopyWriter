@@ -1,25 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -m pytest tests/test_utils.py::TestTaskManagement::test_serialize_task_invalid_input -v)",
-      "Bash(python -m pytest tests/test_downloaders.py -v)",
-      "Bash(python -m pytest tests/test_queue_manager.py -v)",
-      "Bash(python -m pytest tests/test_queue_manager.py::TestQueueManager::test_error_handling_in_methods -v)",
-      "Bash(python test_bilibili_crawler.py:*)",
-      "Bash(cat:*)",
       "WebSearch",
-      "WebFetch(domain:github.com)",
-      "Bash(npm install:*)",
-      "Bash(npx:*)",
-      "Bash(npm uninstall:*)",
-      "Bash(npm start)",
-      "Bash(docker logs:*)",
-      "Bash(npm run build:win:*)",
-      "Bash(docker-compose:*)",
-      "Bash(python -m pytest:*)",
-      "Bash(conda activate copywriter)"
+      "Bash"
     ],
-    "deny": [],
-    "ask": []
+    "ask": [
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(rm *)"
+    ]
   }
 }
