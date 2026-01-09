@@ -6,6 +6,7 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 const os = require('os');
+const logger = require('./logger');
 
 class AsrService {
   constructor(serviceUrl = 'http://localhost:8082') {
@@ -13,7 +14,7 @@ class AsrService {
   }
 
   async convertWebMToWav(webmBuffer) {
-    console.log('[ASR] Converting WebM to WAV...');
+    logger.info('Converting WebM to WAV...');
 
     // Create temp files
     const tmpDir = os.tmpdir();
@@ -24,18 +25,18 @@ class AsrService {
     try {
       // Write WebM buffer to temp file
       fs.writeFileSync(webmPath, webmBuffer);
-      console.log(`[ASR] Wrote WebM to: ${webmPath}`);
+      logger.debug(`Wrote WebM to: ${webmPath}`);
 
       // Convert using FFmpeg
       const ffmpegCmd = `ffmpeg -i "${webmPath}" -ar 16000 -ac 1 -acodec pcm_s16le "${wavPath}" -y`;
-      console.log(`[ASR] Running: ${ffmpegCmd}`);
+      logger.debug(`Running FFmpeg: ${ffmpegCmd}`);
 
       await execAsync(ffmpegCmd);
-      console.log('[ASR] ✓ Conversion completed');
+      logger.info('FFmpeg conversion completed');
 
       // Read WAV file
       const wavBuffer = fs.readFileSync(wavPath);
-      console.log(`[ASR] WAV size: ${wavBuffer.length} bytes`);
+      logger.debug(`WAV size: ${wavBuffer.length} bytes`);
 
       // Cleanup temp files
       fs.unlinkSync(webmPath);
@@ -43,6 +44,7 @@ class AsrService {
 
       return wavBuffer;
     } catch (error) {
+      logger.error('FFmpeg conversion failed:', error.message);
       // Cleanup on error
       if (fs.existsSync(webmPath)) fs.unlinkSync(webmPath);
       if (fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
@@ -52,7 +54,7 @@ class AsrService {
 
   async transcribe(audioBuffer) {
     try {
-      console.log(`[ASR] Received audio buffer: ${audioBuffer.length} bytes`);
+      logger.info(`Received audio buffer: ${audioBuffer.length} bytes`);
 
       // Convert WebM to WAV
       const wavBuffer = await this.convertWebMToWav(audioBuffer);
@@ -65,7 +67,7 @@ class AsrService {
         contentType: 'audio/wav'
       });
 
-      console.log('[ASR] Sending WAV to ASR service...');
+      logger.info(`Sending WAV to ASR service: ${this.serviceUrl}/transcribe`);
 
       const response = await axios.post(
         `${this.serviceUrl}/transcribe`,
@@ -78,19 +80,19 @@ class AsrService {
         }
       );
 
-      console.log('[ASR] ✓ Received response from ASR service');
+      logger.info('Received response from ASR service');
 
       if (response.data && response.data.text) {
-        console.log(`[ASR] Transcribed text: "${response.data.text}"`);
+        logger.info(`Transcribed text: "${response.data.text}"`);
         return response.data.text;
       }
 
-      console.log('[ASR] No text in response');
+      logger.warn('No text in ASR response');
       return '';
     } catch (error) {
-      console.error('[ASR] ✗ ASR service error:', error.message);
+      logger.error('ASR service error:', error.message);
       if (error.response) {
-        console.error('[ASR] Response data:', error.response.data);
+        logger.error('ASR response data:', JSON.stringify(error.response.data));
       }
       throw error;
     }
