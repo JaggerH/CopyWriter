@@ -1,6 +1,6 @@
-# ASR语音识别服务 Dockerfile (NVIDIA NGC - 最高性能)
-# 使用NVIDIA官方优化的PyTorch容器，支持CUDA 12.8
-FROM nvcr.io/nvidia/pytorch:24.12-py3
+# ASR语音识别服务 Dockerfile
+# 使用轻量级 PyTorch 运行时容器，支持CUDA 12.1
+FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
 
 # 设置环境变量
 ENV DEBIAN_FRONTEND=noninteractive
@@ -22,7 +22,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # 首先安装音频处理相关依赖
-RUN pip install torchaudio soundfile librosa --extra-index-url https://download.pytorch.org/whl/cu124
+RUN pip install torchaudio soundfile librosa --extra-index-url https://download.pytorch.org/whl/cu121
 
 # 然后安装其他应用依赖
 RUN pip install --no-cache-dir -r requirements.txt
@@ -31,7 +31,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 创建必要目录
-RUN mkdir -p /app/media/{raw,audio,text} /app/models
+RUN mkdir -p /app/media/{raw,audio,text} /app/models /app/vector_db
 
 # 暴露端口
 EXPOSE 8000

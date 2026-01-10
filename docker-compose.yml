@@ -15,6 +15,10 @@ volumes:
   asr-models:
     driver: local
 
+  # ASR向量数据库（RAG热词系统）
+  asr-vector-db:
+    driver: local
+
 services:
   # 1. 视频解析下载服务 (基于Douyin_TikTok_Download_API)
   video-service:
@@ -43,12 +47,18 @@ services:
       - "8082:8000"
     volumes:
       - media-pipeline:/app/media
-      - asr-models:/app/models
+      - ./services/asr-service/models:/app/models  # 挂载本地模型目录（开发用）
       - ./services/asr-service/user_models:/app/user_models  # 热词和用户数据持久化
+      - asr-vector-db:/app/vector_db  # RAG 向量数据库持久化
     environment:
       - MODEL_CACHE_DIR=/app/models
       - PYTHONPATH=/app
       - CUDA_VISIBLE_DEVICES=0  # 使用第一个GPU
+      - ASR_MODEL=funasr-nano-2512  # Fun-ASR-Nano-2512 模型
+      - RAG_ENABLED=true  # 启用 RAG 热词检索
+      - QDRANT_PATH=/app/vector_db  # RAG 向量库路径
+      - DEFAULT_SCENE=${DEFAULT_SCENE:-tech}  # 默认场景配置
+      - USER_SCENE_MERGE=${USER_SCENE_MERGE:-}  # user场景要合并的场景列表
     networks:
       - app-network
     restart: always

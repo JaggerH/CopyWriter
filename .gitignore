@@ -10,3 +10,5 @@ output/
 
 logs/
 shared/
+# ASR 模型文件（1.9GB+，通过外部下载）
+services/asr-service/models/

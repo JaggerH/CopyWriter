@@ -1,0 +1,18 @@
+# 排除模型文件（通过 volume 挂载，1.9GB+）
+models/
+
+# 排除 Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 排除日志和临时文件
+*.log
+*.tmp
+.DS_Store
+
+# 排除文档和临时脚本
+*.md
+!README.md
