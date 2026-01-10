@@ -33,6 +33,16 @@ COPY . .
 # 创建必要目录
 RUN mkdir -p /app/media/{raw,audio,text} /app/models /app/vector_db
 
+# 下载 Fun-ASR 模型必需的 Python 文件（model.py 和 ctc.py）
+# FunASR 需要这些文件来注册 FunASRNano 模型类
+RUN cd /tmp && \
+    git clone --depth 1 https://github.com/FunAudioLLM/Fun-ASR.git && \
+    mkdir -p /root/.cache/modelscope/hub/models/FunAudioLLM/Fun-ASR-Nano-2512 && \
+    cp /tmp/Fun-ASR/model.py /root/.cache/modelscope/hub/models/FunAudioLLM/Fun-ASR-Nano-2512/ && \
+    cp /tmp/Fun-ASR/ctc.py /root/.cache/modelscope/hub/models/FunAudioLLM/Fun-ASR-Nano-2512/ && \
+    rm -rf /tmp/Fun-ASR && \
+    echo "✓ Fun-ASR 模型文件已预安装"
+
 # 暴露端口
 EXPOSE 8000
 
